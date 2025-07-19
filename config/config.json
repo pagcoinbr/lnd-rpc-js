@@ -2,26 +2,19 @@
   "server": {
     "port": 5002,
     "secretKey": "sua-chave-secreta-super-segura-aqui-123456",
-    "allowedIps": ["100.77.237.26"]
-  },
-  "bitcoin": {
-    "rpcHost": "localhost",
-    "rpcPort": 8332,
-    "rpcUser": "bitcoin",
-    "rpcPassword": "bitcoin123",
-    "network": "mainnet"
+    "allowedIps": ["0.0.0.0"]
   },
   "lightning": {
     "host": "localhost:10009",
-    "tlsCertPath": "~/.lnd/tls.cert",
-    "macaroonPath": "~/.lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+    "tlsCertPath": "/data/lnd/tls.cert",
+    "macaroonPath": "/data/lnd/data/chain/bitcoin/testnet/admin.macaroon"
   },
   "liquid": {
     "rpcHost": "localhost",
-    "rpcPort": 7041,
-    "rpcUser": "elements",
-    "rpcPassword": "elements123",
-    "network": "liquidv1"
+    "rpcPort": 7040,
+    "rpcUser": "test",
+    "rpcPassword": "test",
+    "network": "liquidtestnet"
   },
   "logging": {
     "level": "info",
