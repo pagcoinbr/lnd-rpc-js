@@ -115,20 +115,29 @@ app.get('/balance/:network', async (req, res) => {
   try {
     const { network } = req.params;
     
-    if (!['bitcoin', 'lightning', 'liquid'].includes(network.toLowerCase())) {
+    if (!['bitcoin', 'lightning', 'liquid', 'all'].includes(network.toLowerCase())) {
       return res.status(400).json({ 
         error: 'Rede não suportada',
-        supported: ['bitcoin', 'lightning', 'liquid']
+        supported: ['bitcoin', 'lightning', 'liquid', 'all']
       });
     }
     
-    const balance = await paymentProcessor.getBalance(network.toLowerCase());
-    
-    res.json({
-      success: true,
-      network: network.toLowerCase(),
-      balance
-    });
+    if (network.toLowerCase() === 'all') {
+      // Obter todos os saldos
+      const allBalances = await paymentProcessor.getAllBalances();
+      res.json({
+        success: true,
+        balances: allBalances
+      });
+    } else {
+      // Obter saldo específico
+      const balance = await paymentProcessor.getBalance(network.toLowerCase());
+      res.json({
+        success: true,
+        network: network.toLowerCase(),
+        balance
+      });
+    }
     
   } catch (error) {
     logger.error(`Erro ao consultar saldo: ${error.message}`, error);
@@ -194,6 +203,25 @@ app.get('/sent', (req, res) => {
     logger.error(`Erro ao listar pagamentos enviados: ${error.message}`, error);
     res.status(500).json({ 
       error: 'Erro ao listar pagamentos enviados',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint para consultar todos os saldos
+app.get('/balance/all', async (req, res) => {
+  try {
+    const allBalances = await paymentProcessor.getAllBalances();
+    
+    res.json({
+      success: true,
+      balances: allBalances
+    });
+    
+  } catch (error) {
+    logger.error(`Erro ao consultar todos os saldos: ${error.message}`, error);
+    res.status(500).json({ 
+      error: 'Erro ao consultar saldos',
       message: error.message 
     });
   }

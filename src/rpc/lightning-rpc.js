@@ -2,6 +2,7 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 class LightningRPC {
   constructor(config, logger) {
@@ -104,6 +105,11 @@ class LightningRPC {
     });
   }
 
+  // Método para obter saldo on-chain (alias para getBalance para compatibilidade)
+  async getOnChainBalance() {
+    return await this.getBalance();
+  }
+
   async getChannelBalance() {
     return new Promise((resolve, reject) => {
       if (!this.client) {
@@ -126,40 +132,13 @@ class LightningRPC {
     });
   }
 
-  async sendPayment(paymentRequest, amountSats) {
-    return new Promise((resolve, reject) => {
-      if (!this.client) {
-        reject(new Error('Cliente Lightning não inicializado'));
-        return;
-      }
-
-      try {
-        // Verificar se é lightning address ou invoice
-        if (paymentRequest.includes('@')) {
-          // Lightning Address - precisa resolver para invoice primeiro
-          this.resolveLightningAddress(paymentRequest, amountSats)
-            .then(invoice => this.payInvoice(invoice))
-            .then(resolve)
-            .catch(reject);
-        } else {
-          // Invoice direto
-          this.payInvoice(paymentRequest)
-            .then(resolve)
-            .catch(reject);
-        }
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
   async resolveLightningAddress(lightningAddress, amountSats) {
     try {
       const [username, domain] = lightningAddress.split('@');
       
       // Fazer requisição LNURL
-      const lnurlResponse = await fetch(`https://${domain}/.well-known/lnurlp/${username}`);
-      const lnurlData = await lnurlResponse.json();
+      const lnurlResponse = await axios.get(`https://${domain}/.well-known/lnurlp/${username}`);
+      const lnurlData = lnurlResponse.data;
       
       if (lnurlData.status === 'ERROR') {
         throw new Error(`LNURL Error: ${lnurlData.reason}`);
@@ -172,8 +151,8 @@ class LightningRPC {
       }
       
       // Solicitar invoice
-      const invoiceResponse = await fetch(`${lnurlData.callback}?amount=${amountMsats}`);
-      const invoiceData = await invoiceResponse.json();
+      const invoiceResponse = await axios.get(`${lnurlData.callback}?amount=${amountMsats}`);
+      const invoiceData = invoiceResponse.data;
       
       if (invoiceData.status === 'ERROR') {
         throw new Error(`Invoice Error: ${invoiceData.reason}`);
@@ -265,6 +244,238 @@ class LightningRPC {
         });
       });
     });
+  }
+
+  // ============ MÉTODOS ON-CHAIN ============
+
+  async sendOnChain(destinationAddress, amountSats, feeRate = null) {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      // Preparar parâmetros da transação
+      const sendRequest = {
+        addr: destinationAddress,
+        amount: amountSats.toString()
+      };
+
+      // Se taxa específica foi fornecida
+      if (feeRate) {
+        sendRequest.sat_per_vbyte = feeRate;
+      } else {
+        // Usar estimativa automática
+        sendRequest.target_conf = 6; // 6 confirmações como alvo
+      }
+
+      this.client.sendCoins(sendRequest, (err, response) => {
+        if (err) {
+          this.logger.error('Erro ao enviar transação on-chain:', err);
+          reject(err);
+          return;
+        }
+
+        resolve({
+          transactionHash: response.txid,
+          fee: parseInt(response.amount || 0) // Taxa em satoshis
+        });
+      });
+    });
+  }
+
+  async getNewAddress(addressType = 'p2wkh') {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      // Mapear tipos de endereço
+      let type = 0; // WITNESS_PUBKEY_HASH (p2wkh) - padrão
+      switch (addressType.toLowerCase()) {
+        case 'p2wkh':
+        case 'bech32':
+          type = 0; // WITNESS_PUBKEY_HASH
+          break;
+        case 'p2sh':
+        case 'p2sh-segwit':
+          type = 1; // NESTED_PUBKEY_HASH
+          break;
+        case 'p2tr':
+        case 'taproot':
+          type = 4; // TAPROOT_PUBKEY
+          break;
+      }
+
+      this.client.newAddress({ type: type }, (err, response) => {
+        if (err) {
+          this.logger.error('Erro ao gerar novo endereço:', err);
+          reject(err);
+          return;
+        }
+
+        resolve(response.address);
+      });
+    });
+  }
+
+  async estimateFee(targetConf = 6) {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      this.client.estimateFee({ 
+        AddrToAmount: {}, // Mapa vazio para estimativa geral
+        target_conf: targetConf 
+      }, (err, response) => {
+        if (err) {
+          this.logger.error('Erro ao estimar taxa:', err);
+          reject(err);
+          return;
+        }
+
+        resolve({
+          feeRate: parseInt(response.fee_sat || 0),
+          targetConf: targetConf
+        });
+      });
+    });
+  }
+
+  async getTransaction(txid) {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      this.client.getTransactions({}, (err, response) => {
+        if (err) {
+          this.logger.error('Erro ao buscar transações:', err);
+          reject(err);
+          return;
+        }
+
+        // Buscar transação específica
+        const transaction = response.transactions.find(tx => tx.tx_hash === txid);
+        
+        if (!transaction) {
+          reject(new Error(`Transação não encontrada: ${txid}`));
+          return;
+        }
+
+        resolve({
+          txid: transaction.tx_hash,
+          amount: parseInt(transaction.amount || 0),
+          fee: parseInt(transaction.total_fees || 0),
+          confirmations: parseInt(transaction.num_confirmations || 0),
+          blockHeight: parseInt(transaction.block_height || 0),
+          timestamp: parseInt(transaction.time_stamp || 0),
+          destAddresses: transaction.dest_addresses || []
+        });
+      });
+    });
+  }
+
+  async listTransactions(maxTransactions = 100) {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      this.client.getTransactions({
+        start_height: 0,
+        end_height: -1,
+        account: ''
+      }, (err, response) => {
+        if (err) {
+          this.logger.error('Erro ao listar transações:', err);
+          reject(err);
+          return;
+        }
+
+        const transactions = response.transactions
+          .slice(0, maxTransactions)
+          .map(tx => ({
+            txid: tx.tx_hash,
+            amount: parseInt(tx.amount || 0),
+            fee: parseInt(tx.total_fees || 0),
+            confirmations: parseInt(tx.num_confirmations || 0),
+            blockHeight: parseInt(tx.block_height || 0),
+            timestamp: parseInt(tx.time_stamp || 0),
+            destAddresses: tx.dest_addresses || []
+          }));
+
+        resolve(transactions);
+      });
+    });
+  }
+
+  // ============ MÉTODO UNIFICADO DE PAGAMENTO ============
+
+  async sendPayment(destination, amountSats, options = {}) {
+    try {
+      // Detectar se é Lightning ou On-chain
+      if (this.isLightningDestination(destination)) {
+        // Lightning payment
+        this.logger.info(`Enviando pagamento Lightning para: ${destination}`);
+        return await this.sendLightningPayment(destination, amountSats);
+      } else {
+        // On-chain payment
+        this.logger.info(`Enviando pagamento On-chain para: ${destination}`);
+        return await this.sendOnChain(destination, amountSats, options.feeRate);
+      }
+    } catch (error) {
+      this.logger.error(`Erro no pagamento unificado: ${error.message}`, error);
+      throw error;
+    }
+  }
+
+  // Renomear método original para ser mais específico
+  async sendLightningPayment(paymentRequest, amountSats) {
+    return new Promise((resolve, reject) => {
+      if (!this.client) {
+        reject(new Error('Cliente Lightning não inicializado'));
+        return;
+      }
+
+      try {
+        // Verificar se é lightning address ou invoice
+        if (paymentRequest.includes('@')) {
+          // Lightning Address - precisa resolver para invoice primeiro
+          this.resolveLightningAddress(paymentRequest, amountSats)
+            .then(invoice => this.payInvoice(invoice))
+            .then(resolve)
+            .catch(reject);
+        } else {
+          // Invoice direto
+          this.payInvoice(paymentRequest)
+            .then(resolve)
+            .catch(reject);
+        }
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  isLightningDestination(destination) {
+    // Lightning invoice (bolt11)
+    if (destination.toLowerCase().startsWith('ln')) {
+      return true;
+    }
+    
+    // Lightning address
+    if (destination.includes('@') && !destination.includes('.')) {
+      return true;
+    }
+    
+    // Assumir que é endereço Bitcoin se não for claramente Lightning
+    return false;
   }
 }
 

@@ -1,14 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../config/config.json');
-const BitcoinRPC = require('./rpc/bitcoin-rpc');
 const LightningRPC = require('./rpc/lightning-rpc');
 const LiquidRPC = require('./rpc/liquid-rpc');
 
 class PaymentProcessor {
   constructor(logger) {
     this.logger = logger;
-    this.bitcoinRPC = new BitcoinRPC(config.bitcoin, logger);
     this.lightningRPC = new LightningRPC(config.lightning, logger);
     this.liquidRPC = new LiquidRPC(config.liquid, logger);
   }
@@ -23,13 +21,9 @@ class PaymentProcessor {
       // Determinar qual RPC usar baseado na rede
       switch (network) {
         case 'bitcoin':
-          result = await this.bitcoinRPC.sendPayment(
-            paymentRequest.destinationWallet,
-            paymentRequest.amount
-          );
-          break;
-          
         case 'lightning':
+          // Usar Lightning RPC para ambos Bitcoin on-chain e Lightning Network
+          // O Lightning RPC irá detectar automaticamente o tipo baseado no destino
           result = await this.lightningRPC.sendPayment(
             paymentRequest.destinationWallet,
             paymentRequest.amount
@@ -99,10 +93,12 @@ class PaymentProcessor {
   async getBalance(network) {
     switch (network) {
       case 'bitcoin':
-        return await this.bitcoinRPC.getBalance();
+        // Usar Lightning RPC para saldo on-chain do Bitcoin
+        return await this.lightningRPC.getOnChainBalance();
         
       case 'lightning':
-        return await this.lightningRPC.getBalance();
+        // Usar Lightning RPC para saldo dos canais Lightning
+        return await this.lightningRPC.getChannelBalance();
         
       case 'liquid':
         return await this.liquidRPC.getBalance();
@@ -114,9 +110,17 @@ class PaymentProcessor {
 
   // Método para detectar tipo de endereço/invoice
   detectAddressType(address) {
-    // Lightning invoice
-    if (address.toLowerCase().startsWith('ln') || address.includes('@')) {
+    // Lightning invoice (bolt11)
+    if (address.toLowerCase().startsWith('ln')) {
       return 'lightning';
+    }
+    
+    // Lightning address (usuario@dominio.com)
+    if (address.includes('@') && address.split('@').length === 2) {
+      const [username, domain] = address.split('@');
+      if (username && domain && domain.includes('.')) {
+        return 'lightning';
+      }
     }
     
     // Bitcoin address patterns
@@ -133,6 +137,27 @@ class PaymentProcessor {
     }
     
     return 'unknown';
+  }
+
+  // Método adicional para obter informações detalhadas de saldos
+  async getAllBalances() {
+    try {
+      const [bitcoinBalance, lightningBalance, liquidBalance] = await Promise.all([
+        this.lightningRPC.getOnChainBalance(),
+        this.lightningRPC.getChannelBalance(),
+        this.liquidRPC.getBalance()
+      ]);
+
+      return {
+        bitcoin: bitcoinBalance,
+        lightning: lightningBalance,
+        liquid: liquidBalance,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error('Erro ao obter todos os saldos:', error);
+      throw error;
+    }
   }
 }
 

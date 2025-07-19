@@ -1,399 +1,512 @@
-# Guia de Desenvolvimento - Servidor de Pagamentos Multi-Chain
+# Documentação Técnica de Desenvolvimento
 
-Este documento explica como o projeto foi construído do zero e ensina conceitos fundamentais para criar servidores similares.
+## 📋 Visão Geral da Arquitetura
 
-## 📚 Conceitos Fundamentais
+Este projeto implementa um servidor de pagamentos multi-chain que utiliza **LND (Lightning Network Daemon)** como cliente principal para transações Bitcoin e Lightning Network, além do **Elements Core** para transações Liquid. 
 
-### 🌐 HTTP vs gRPC - Entendendo as Diferenças
+### Decisões Arquiteturais
 
-#### **HTTP/REST (usado no nosso servidor web)**
-```
-Cliente → HTTP POST → Servidor → Resposta JSON
-```
-- **Formato**: JSON (texto legível)
-- **Protocolo**: HTTP/HTTPS
-- **Uso**: Comunicação web, APIs públicas
-- **Exemplo**: `POST /payment` com dados JSON
+1. **LND como cliente unificado**: Elimina a necessidade de Bitcoin Core separado
+2. **PaymentProcessor como orquestrador**: Centraliza a lógica de roteamento de pagamentos
+3. **Detecção automática**: Identifica tipo de pagamento baseado no formato do destino
+4. **Interface HTTP RESTful**: Facilita integração com sistemas externos
 
-#### **gRPC (usado para comunicar com nós Bitcoin)**
-```
-Cliente → gRPC → Nó Bitcoin/Lightning → Resposta binária
-```
-- **Formato**: Protocol Buffers (binário, mais rápido)
-- **Protocolo**: HTTP/2 + TLS
-- **Uso**: Comunicação entre serviços internos
-- **Exemplo**: Chamadas RPC para Bitcoin Core
+## 🏗️ Estrutura de Classes
 
-### 🔗 Arquitetura do Projeto
+### PaymentProcessor (Orquestrador Principal)
 
-```
-┌─────────────────┐    HTTP/JSON    ┌─────────────────┐
-│   Cliente Web   │ ───────────────→ │  Nosso Servidor │
-│  (Python, etc)  │ ←─────────────── │   (Node.js)     │
-└─────────────────┘                 └─────────────────┘
-                                             │
-                    ┌────────────────────────┼────────────────────────┐
-                    │                        │                        │
-                    ▼                        ▼                        ▼
-            ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-            │  Bitcoin Core   │      │      LND        │      │ Elements Core   │
-            │   (RPC/HTTP)    │      │    (gRPC)       │      │   (RPC/HTTP)    │
-            └─────────────────┘      └─────────────────┘      └─────────────────┘
+```javascript
+class PaymentProcessor {
+  constructor(logger) {
+    this.lightningRPC = new LightningRPC(config.lightning, logger);
+    this.liquidRPC = new LiquidRPC(config.liquid, logger);
+  }
+}
 ```
 
-## 🛠️ Ferramentas e Tecnologias Utilizadas
+**Responsabilidades**:
+- Roteamento de pagamentos entre LND e Elements
+- Detecção automática de tipo de endereço/invoice
+- Gestão de arquivos de requisição (pending → sent)
+- Consulta unificada de saldos
 
-### **Node.js e Dependências**
+### LightningRPC (Cliente LND)
+
+```javascript
+class LightningRPC {
+  // Configuração gRPC com TLS + Macaroons
+  initClient() {
+    const sslCreds = grpc.credentials.createSsl(lndCert);
+    const macaroonCreds = grpc.credentials.createFromMetadataGenerator(...);
+    const credentials = grpc.credentials.combineChannelCredentials(sslCreds, macaroonCreds);
+    this.client = new lnrpc.Lightning(this.config.host, credentials);
+  }
+}
+```
+
+**Métodos Lightning Network**:
+- `sendLightningPayment()` - Pagamentos Lightning via invoice/address
+- `resolveLightningAddress()` - Resolução LNURL-pay
+- `payInvoice()` - Pagamento direto de invoice
+- `createInvoice()` - Geração de invoices
+- `decodeInvoice()` - Decodificação de invoices
+- `getChannelBalance()` - Saldo dos canais
+
+**Métodos Bitcoin On-chain**:
+- `sendOnChain()` - Transações Bitcoin via `sendCoins`
+- `getOnChainBalance()` - Saldo da wallet on-chain
+- `getNewAddress()` - Geração de endereços
+- `estimateFee()` - Estimativa de taxas
+- `getTransaction()` - Detalhes de transação específica
+- `listTransactions()` - Histórico de transações
+
+**Método Unificado**:
+- `sendPayment()` - Detecta automaticamente e roteia para Lightning ou on-chain
+
+### LiquidRPC (Cliente Elements)
+
+```javascript
+class LiquidRPC {
+  async rpcCall(method, params = []) {
+    // Chamadas JSON-RPC tradicionais
+    const response = await axios.post(this.rpcUrl, {
+      jsonrpc: '1.0',
+      method: method,
+      params: params
+    });
+  }
+}
+```
+
+**Funcionalidades Liquid**:
+- Transações confidenciais
+- Múltiplos assets (L-BTC, USDt, etc.)
+- Compatibilidade total com Bitcoin Core RPC
+
+## 🔌 Interfaces e Protocolos
+
+### Interface gRPC (LND)
+
+```protobuf
+service Lightning {
+  // Wallet on-chain
+  rpc WalletBalance(WalletBalanceRequest) returns (WalletBalanceResponse);
+  rpc SendCoins(SendCoinsRequest) returns (SendCoinsResponse);
+  rpc NewAddress(NewAddressRequest) returns (NewAddressResponse);
+  
+  // Lightning Network
+  rpc SendPaymentSync(SendRequest) returns (SendResponse);
+  rpc AddInvoice(Invoice) returns (AddInvoiceResponse);
+  rpc DecodePayReq(PayReqString) returns (PayReq);
+  rpc ChannelBalance(ChannelBalanceRequest) returns (ChannelBalanceResponse);
+}
+```
+
+### Interface JSON-RPC (Elements)
 
 ```json
 {
-  "express": "^4.18.2",        // Servidor HTTP
-  "@grpc/grpc-js": "^1.9.0",   // Cliente gRPC
-  "@grpc/proto-loader": "^0.7.8", // Carregador de .proto
-  "axios": "^1.5.0",          // Cliente HTTP para RPC
-  "fs-extra": "^11.1.1",      // Manipulação de arquivos
-  "winston": "^3.10.0"        // Sistema de logs
+  "jsonrpc": "1.0",
+  "method": "sendtoaddress",
+  "params": ["address", amount, "comment", "comment_to", false, false, null, "unset", null, asset_id],
+  "id": "liquid-rpc"
 }
 ```
 
-### **Por que cada ferramenta?**
+## 📊 Fluxo de Dados
 
-- **Express**: Framework web simples para criar APIs HTTP
-- **gRPC**: Comunicação eficiente com Lightning Network (LND)
-- **Axios**: Fazer chamadas HTTP para Bitcoin Core e Elements
-- **Winston**: Registrar todas as operações em arquivos de log
-- **fs-extra**: Gerenciar arquivos de pagamentos de forma segura
+### 1. Processamento de Pagamentos
 
-## 🏗️ Construção Passo a Passo
+```mermaid
+graph TD
+    A[HTTP Request] --> B[PaymentProcessor]
+    B --> C{Detectar Tipo}
+    C -->|Lightning| D[LightningRPC]
+    C -->|Bitcoin| D
+    C -->|Liquid| E[LiquidRPC]
+    D --> F[LND gRPC]
+    E --> G[Elements JSON-RPC]
+    F --> H[Blockchain]
+    G --> H
+```
 
-### **Passo 1: Estrutura Base**
+### 2. Detecção de Tipo de Pagamento
 
-Primeiro, criamos a estrutura de diretórios:
+```javascript
+function detectPaymentType(destination) {
+  // Lightning invoice (bolt11)
+  if (destination.startsWith('ln')) return 'lightning';
+  
+  // Lightning address
+  if (destination.includes('@') && hasDomain(destination)) return 'lightning';
+  
+  // Bitcoin addresses
+  if (isBitcoinAddress(destination)) return 'bitcoin';
+  
+  // Liquid addresses
+  if (isLiquidAddress(destination)) return 'liquid';
+}
+```
+
+### 3. Roteamento no PaymentProcessor
+
+```javascript
+async processPayment(paymentRequest) {
+  const network = paymentRequest.network.toLowerCase();
+  
+  switch (network) {
+    case 'bitcoin':
+    case 'lightning':
+      // LND detecta automaticamente Lightning vs on-chain
+      result = await this.lightningRPC.sendPayment(
+        paymentRequest.destinationWallet,
+        paymentRequest.amount
+      );
+      break;
+      
+    case 'liquid':
+      result = await this.liquidRPC.sendPayment(
+        paymentRequest.destinationWallet,
+        paymentRequest.amount
+      );
+      break;
+  }
+}
+```
+
+## 🔧 Configuração e Autenticação
+
+### Autenticação LND (gRPC + TLS + Macaroons)
+
+```javascript
+// 1. Carregar certificado TLS
+const lndCert = fs.readFileSync(this.config.tlsCertPath);
+const sslCreds = grpc.credentials.createSsl(lndCert);
+
+// 2. Carregar macaroon para autenticação
+const macaroon = fs.readFileSync(this.config.macaroonPath).toString('hex');
+const metadata = new grpc.Metadata();
+metadata.add('macaroon', macaroon);
+
+// 3. Combinar credenciais
+const credentials = grpc.credentials.combineChannelCredentials(sslCreds, macaroonCreds);
+```
+
+### Autenticação Elements (Basic Auth)
+
+```javascript
+const rpcUrl = `http://${config.rpcUser}:${config.rpcPassword}@${config.rpcHost}:${config.rpcPort}`;
+```
+
+## 🧪 Testes e Validação
+
+### Estrutura de Testes
 
 ```bash
-mkdir lnd-rpc-py
-cd lnd-rpc-py
-npm init -y
+./test.sh
+├── Conectividade com servidor
+├── Consulta de saldos
+│   ├── Bitcoin (via LND)
+│   ├── Lightning (via LND)
+│   └── Liquid (via Elements)
+├── Listagem de pagamentos
+└── Envio de pagamento de teste
 ```
 
-### **Passo 2: Servidor HTTP Principal (`src/server.js`)**
+### Validação de Endereços
 
 ```javascript
-// Conceitos básicos de um servidor HTTP
-const express = require('express');
-const app = express();
-
-// Middleware para interpretar JSON
-app.use(express.json());
-
-// Rota principal - recebe pagamentos
-app.post('/payment', (req, res) => {
-    // 1. Validar dados
-    // 2. Salvar em payment_req/
-    // 3. Processar pagamento
-    // 4. Retornar resposta
-});
-
-// Iniciar servidor na porta 5002
-app.listen(5002, () => {
-    console.log('Servidor rodando na porta 5002');
-});
-```
-
-### **Passo 3: Sistema de Autenticação**
-
-```javascript
-// Middleware de autenticação
-function authenticateRequest(req, res, next) {
-    const secretKey = req.headers['x-secret-key'];
-    const validKey = config.server.secretKey;
-    
-    if (secretKey !== validKey) {
-        return res.status(403).json({ error: 'Chave inválida' });
-    }
-    
-    next(); // Continua para próximo middleware
-}
-
-// Aplicar autenticação em todas as rotas protegidas
-app.use('/payment', authenticateRequest);
-app.use('/balance', authenticateRequest);
-```
-
-### **Passo 4: Clientes RPC**
-
-#### **Bitcoin/Liquid RPC (HTTP)**
-```javascript
-// Comunicação tradicional RPC via HTTP
-const axios = require('axios');
-
-async function bitcoinRPC(method, params) {
-    const response = await axios.post(`http://${host}:${port}`, {
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: method,      // Ex: 'sendtoaddress'
-        params: params       // Ex: ['endereço', 0.001]
-    }, {
-        auth: {
-            username: rpcUser,
-            password: rpcPassword
-        }
-    });
-    
-    return response.data.result;
-}
-```
-
-#### **Lightning gRPC**
-```javascript
-// Comunicação moderna via gRPC
-const grpc = require('@grpc/grpc-js');
-const protoLoader = require('@grpc/proto-loader');
-
-// Carregar definições do arquivo .proto
-const packageDefinition = protoLoader.loadSync('lightning.proto');
-const lnrpc = grpc.loadPackageDefinition(packageDefinition).lnrpc;
-
-// Criar cliente autenticado
-const lightning = new lnrpc.Lightning('localhost:10009', credentials);
-
-// Fazer chamadas assíncronas
-lightning.sendPaymentSync(paymentRequest, (error, response) => {
-    if (error) {
-        console.error('Erro:', error);
-    } else {
-        console.log('Pagamento enviado:', response);
-    }
-});
-```
-
-### **Passo 5: Processamento de Pagamentos**
-
-```javascript
-// Fluxo completo de processamento
-async function processPayment(paymentData) {
-    try {
-        // 1. Detectar tipo de rede
-        const network = detectNetwork(paymentData.network, paymentData.destinationWallet);
-        
-        // 2. Escolher cliente RPC apropriado
-        let result;
-        switch(network) {
-            case 'bitcoin':
-                result = await bitcoinRPC.sendToAddress(destination, amount);
-                break;
-            case 'lightning':
-                result = await lightningClient.sendPayment(invoice);
-                break;
-            case 'liquid':
-                result = await liquidRPC.sendToAddress(destination, amount);
-                break;
-        }
-        
-        // 3. Mover arquivo de pending para sent
-        await movePaymentFile(paymentData.transactionId, result.txid);
-        
-        return result;
-    } catch (error) {
-        logger.error('Erro no processamento:', error);
-        throw error;
-    }
-}
-```
-
-## 🎓 Conceitos de JavaScript Utilizados
-
-### **1. Async/Await**
-```javascript
-// Ao invés de callbacks aninhados (callback hell)
-async function exemploModerno() {
-    try {
-        const saldo = await getRpcBalance();
-        const resultado = await processarPagamento(saldo);
-        return resultado;
-    } catch (error) {
-        console.error(error);
-    }
-}
-```
-
-### **2. Modules (require/module.exports)**
-```javascript
-// Organizar código em módulos
-// arquivo: bitcoin-rpc.js
-module.exports = {
-    getBalance: async () => { /* ... */ },
-    sendPayment: async (address, amount) => { /* ... */ }
+// Bitcoin addresses
+const bitcoinRegex = {
+  legacy: /^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/,
+  segwit: /^3[a-km-zA-HJ-NP-Z1-9]{25,34}$/,
+  bech32: /^bc1[a-zA-HJ-NP-Z0-9]{39,59}$/
 };
 
-// arquivo: server.js
-const bitcoinRPC = require('./rpc/bitcoin-rpc');
+// Lightning addresses
+const lightningRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+// Lightning invoices
+const invoiceRegex = /^ln[a-zA-Z0-9]+$/;
 ```
 
-### **3. Error Handling**
+## 🎯 Lightning Addresses (LNURL-pay)
+
+### Processo de Resolução
+
 ```javascript
-// Tratamento robusto de erros
-try {
-    const result = await operacaoArriscada();
-} catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-        console.error('Nó não está rodando');
-    } else {
-        console.error('Erro desconhecido:', error.message);
-    }
+async resolveLightningAddress(lightningAddress, amountSats) {
+  const [username, domain] = lightningAddress.split('@');
+  
+  // 1. Fazer requisição LNURL
+  const lnurlResponse = await axios.get(
+    `https://${domain}/.well-known/lnurlp/${username}`
+  );
+  
+  // 2. Verificar limites de valor
+  const amountMsats = amountSats * 1000;
+  if (amountMsats < lnurlData.minSendable || amountMsats > lnurlData.maxSendable) {
+    throw new Error('Valor fora dos limites');
+  }
+  
+  // 3. Solicitar invoice
+  const invoiceResponse = await axios.get(
+    `${lnurlData.callback}?amount=${amountMsats}`
+  );
+  
+  return invoiceData.pr; // invoice para pagamento
 }
 ```
 
-### **4. Object Destructuring**
-```javascript
-// Extrair dados de objetos facilmente
-const { transactionId, amount, network } = req.body;
+### Vantagens das Lightning Addresses
 
-// Ao invés de:
-// const transactionId = req.body.transactionId;
-// const amount = req.body.amount;
+- **User-friendly**: `user@domain.com` em vez de invoices longas
+- **Reutilizável**: Mesmo endereço para múltiplos pagamentos
+- **Dinâmico**: Valor especificado no momento do pagamento
+- **Metadados**: Pode incluir descrição e outras informações
+
+## 📈 Performance e Otimizações
+
+### Conexões Persistentes
+
+```javascript
+// LND gRPC - Conexão persistente
+this.client = new lnrpc.Lightning(this.config.host, credentials);
+
+// Elements - Pool de conexões HTTP
+const axiosInstance = axios.create({
+  timeout: 30000,
+  keepAlive: true
+});
 ```
 
-## 🔧 Scripts Shell - Automatização
+### Caching de Dados
 
-### **start.sh - Script de Inicialização**
+- **Saldos**: Cache de 30 segundos para evitar consultas excessivas
+- **Estimativas de taxa**: Cache de 60 segundos
+- **Informações de canais**: Cache de 5 minutos
+
+### Timeouts e Retry
+
+```javascript
+const axiosConfig = {
+  timeout: 30000,        // 30 segundos para HTTP
+  retry: 3,              // 3 tentativas
+  retryDelay: 1000       // 1 segundo entre tentativas
+};
+
+const grpcOptions = {
+  'grpc.keepalive_time_ms': 30000,
+  'grpc.keepalive_timeout_ms': 5000
+};
+```
+
+## 🔍 Debugging e Logs
+
+### Níveis de Log
+
+```javascript
+logger.error('Erro crítico que impede operação');
+logger.warn('Aviso que não impede operação');
+logger.info('Informação importante sobre fluxo');
+logger.debug('Detalhes técnicos para debugging');
+```
+
+### Logs Estruturados
+
+```json
+{
+  "timestamp": "2025-07-19T10:30:00.000Z",
+  "level": "info",
+  "message": "Pagamento Lightning processado",
+  "paymentId": "abc123",
+  "destination": "user@domain.com",
+  "amount": 1000,
+  "txHash": "def456",
+  "duration": 1250
+}
+```
+
+### Debugging gRPC
+
+```javascript
+// Habilitar logs gRPC detalhados
+process.env.GRPC_VERBOSITY = 'DEBUG';
+process.env.GRPC_TRACE = 'all';
+```
+
+## 🛠️ Desenvolvimento Local
+
+### Setup Rápido
+
 ```bash
-#!/bin/bash
+# 1. Clonar repositório
+git clone <repo> && cd lnd-rpc-py
 
-# Verificar dependências
-if ! command -v node &> /dev/null; then
-    echo "Node.js não encontrado"
-    exit 1
-fi
-
-# Instalar dependências
+# 2. Instalar dependências
 npm install
 
-# Verificar conectividade
-check_port() {
-    timeout 3 bash -c "</dev/tcp/$1/$2"
-}
+# 3. Configurar credenciais
+cp config/config.json.example config/config.json
+# Editar config.json com suas credenciais
 
-# Iniciar servidor
-node src/server.js
+# 4. Iniciar em modo desenvolvimento
+npm run dev
 ```
 
-### **test.sh - Script de Testes**
+### Variáveis de Ambiente
+
 ```bash
-#!/bin/bash
+# Desenvolvimento
+NODE_ENV=development
+LOG_LEVEL=debug
+GRPC_VERBOSITY=INFO
 
-# Função para fazer requisições
-make_request() {
-    curl -s -H "x-secret-key: $SECRET_KEY" \
-         -H "Content-Type: application/json" \
-         -X POST -d "$2" \
-         "http://localhost:5002$1"
+# Produção
+NODE_ENV=production
+LOG_LEVEL=info
+GRPC_KEEPALIVE_TIME_MS=30000
+```
+
+### Hot Reload
+
+```json
+{
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  }
 }
-
-# Testar endpoints
-make_request "/balance/bitcoin"
-make_request "/payment" '{"amount": 1000, "network": "lightning"}'
 ```
 
-## 📁 Organização de Arquivos
+## 🔒 Segurança em Produção
 
-### **Separação de Responsabilidades**
+### Checklist de Segurança
 
+- [ ] **Certificados TLS válidos** para LND
+- [ ] **Macaroons com permissões mínimas** (não usar admin.macaroon em produção)
+- [ ] **Chave secreta forte** (256 bits mínimo)
+- [ ] **Lista de IPs restritiva** (apenas IPs conhecidos)
+- [ ] **Logs sem informações sensíveis** (não logar private keys)
+- [ ] **Timeouts apropriados** para evitar ataques de lentidão
+- [ ] **Rate limiting** para endpoints públicos
+- [ ] **Validação rigorosa** de inputs
+
+### Macaroons Customizados
+
+```bash
+# Criar macaroon com permissões específicas
+lncli bakemacaroon \
+  --save_to ~/.lnd/data/chain/bitcoin/mainnet/payment.macaroon \
+  uri:/lnrpc.Lightning/SendPaymentSync \
+  uri:/lnrpc.Lightning/WalletBalance \
+  uri:/lnrpc.Lightning/ChannelBalance
 ```
-src/
-├── server.js           # Servidor HTTP principal
-├── payment-processor.js # Lógica de processamento
-└── rpc/
-    ├── bitcoin-rpc.js  # Cliente Bitcoin
-    ├── lightning-rpc.js # Cliente Lightning  
-    └── liquid-rpc.js   # Cliente Liquid
-```
 
-**Por quê separar?**
-- **Manutenibilidade**: Cada arquivo tem uma responsabilidade
-- **Testabilidade**: Fácil testar cada módulo isoladamente
-- **Reutilização**: Módulos podem ser usados em outros projetos
+### Monitoramento
 
-## 🚀 Próximos Passos para Aprender
-
-### **1. Para Iniciantes**
-- Aprender JavaScript básico (variáveis, funções, promises)
-- Entender HTTP (métodos, status codes, headers)
-- Praticar com Express.js simples
-
-### **2. Para Intermediários**
-- Estudar gRPC e Protocol Buffers
-- Aprender sobre autenticação e segurança
-- Praticar com diferentes APIs (REST, GraphQL)
-
-### **3. Para Avançados**
-- Implementar testes automatizados
-- Adicionar monitoramento e métricas
-- Estudar microserviços e escalabilidade
-
-## 🔍 Recursos de Estudo
-
-### **Documentação Oficial**
-- [Node.js Documentation](https://nodejs.org/docs/)
-- [Express.js Guide](https://expressjs.com/guide/)
-- [gRPC Documentation](https://grpc.io/docs/)
-
-### **Bitcoin Development**
-- [Bitcoin Core RPC](https://developer.bitcoin.org/reference/rpc/)
-- [Lightning Network Specs](https://github.com/lightning/bolts)
-- [Elements Project](https://elementsproject.org/)
-
-### **JavaScript Moderno**
-- [MDN JavaScript Guide](https://developer.mozilla.org/docs/Web/JavaScript/Guide)
-- [Node.js Best Practices](https://github.com/goldbergyoni/nodebestpractices)
-
-## 💡 Dicas de Desenvolvimento
-
-### **1. Sempre Use Logs**
 ```javascript
-const winston = require('winston');
-const logger = winston.createLogger({
-    transports: [
-        new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-        new winston.transports.File({ filename: 'logs/combined.log' })
-    ]
-});
-
-// Use em vez de console.log
-logger.info('Pagamento processado', { txid: result.txid });
+// Métricas importantes para monitorar
+const metrics = {
+  uptime: process.uptime(),
+  memoryUsage: process.memoryUsage(),
+  activeConnections: server.connections,
+  paymentsSent: counters.payments,
+  errorsCount: counters.errors,
+  lndConnection: await this.lightningRPC.ping(),
+  elementsConnection: await this.liquidRPC.ping()
+};
 ```
 
-### **2. Valide Sempre as Entradas**
-```javascript
-function validatePayment(data) {
-    if (!data.transactionId) throw new Error('transactionId obrigatório');
-    if (!data.amount || data.amount <= 0) throw new Error('amount inválido');
-    if (!['bitcoin', 'lightning', 'liquid'].includes(data.network)) {
-        throw new Error('network inválida');
+## 📚 Referências Técnicas
+
+### Documentação Oficial
+
+- [LND gRPC API](https://lightning.engineering/api-docs/api/lnd/lightning/index.html)
+- [Elements RPC Commands](https://elementsproject.org/en/doc/0.18.1.9/)
+- [BOLT 11 (Lightning Invoices)](https://github.com/lightning/bolts/blob/master/11-payment-encoding.md)
+- [LNURL Specifications](https://github.com/fiatjaf/lnurl-rfc)
+
+### Dependências Principais
+
+```json
+{
+  "@grpc/grpc-js": "^1.9.0",     // Cliente gRPC para LND
+  "@grpc/proto-loader": "^0.7.0", // Carregador de .proto files
+  "express": "^4.18.0",          // Servidor HTTP
+  "axios": "^1.5.0",             // Cliente HTTP para Elements
+  "winston": "^3.10.0",          // Sistema de logs
+  "uuid": "^9.0.0"               // Geração de IDs únicos
+}
+```
+
+### Códigos de Erro Comuns
+
+| Código | Descrição | Solução |
+|--------|-----------|---------|
+| `UNAVAILABLE` | LND não acessível | Verificar se LND está rodando e porta correta |
+| `UNAUTHENTICATED` | Macaroon inválido | Verificar caminho e permissões do macaroon |
+| `INVALID_ARGUMENT` | Parâmetro inválido | Validar formato de endereços e valores |
+| `DEADLINE_EXCEEDED` | Timeout | Aumentar timeouts ou verificar conectividade |
+| `PERMISSION_DENIED` | Permissões insuficientes | Usar macaroon com permissões adequadas |
+
+## 🚀 Deploy e Produção
+
+### Docker (Recomendado)
+
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 5002
+CMD ["node", "src/server.js"]
+```
+
+### Systemd Service
+
+```ini
+[Unit]
+Description=LND RPC Payment Server
+After=network.target lnd.service
+
+[Service]
+Type=simple
+User=payment-server
+WorkingDirectory=/opt/lnd-rpc-py
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Nginx Reverse Proxy
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name payments.example.com;
+    
+    location / {
+        proxy_pass http://localhost:5002;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
     }
 }
 ```
 
-### **3. Trate Erros Graciosamente**
-```javascript
-app.use((error, req, res, next) => {
-    logger.error('Erro não tratado:', error);
-    res.status(500).json({ 
-        error: 'Erro interno do servidor',
-        timestamp: new Date().toISOString()
-    });
-});
+### Backup Strategy
+
+```bash
+# Backup crítico
+- config/config.json (credenciais)
+- logs/ (histórico)
+- payment_sent/ (comprovantes)
+
+# Backup LND (separado)
+- ~/.lnd/data/chain/bitcoin/mainnet/channel.backup
+- ~/.lnd/data/chain/bitcoin/mainnet/wallet.db
 ```
-
-## 🎯 Conclusão
-
-Este projeto demonstra como integrar diferentes tecnologias (HTTP, gRPC, RPC) em uma solução coesa. Os conceitos aprendidos aqui podem ser aplicados em muitos outros projetos de blockchain e desenvolvimento web.
-
-**Principais lições:**
-- ✅ Separação clara de responsabilidades
-- ✅ Comunicação entre diferentes protocolos
-- ✅ Tratamento robusto de erros
-- ✅ Automatização com scripts shell
-- ✅ Segurança básica com autenticação
-
-Continue praticando e experimentando com diferentes APIs e tecnologias!
