@@ -1,0 +1,30 @@
+{
+  "server": {
+    "port": 5002,
+    "secretKey": "sua-chave-secreta-super-segura-aqui-123456",
+    "allowedIps": ["100.77.237.26"]
+  },
+  "bitcoin": {
+    "rpcHost": "localhost",
+    "rpcPort": 8332,
+    "rpcUser": "bitcoin",
+    "rpcPassword": "bitcoin123",
+    "network": "mainnet"
+  },
+  "lightning": {
+    "host": "localhost:10009",
+    "tlsCertPath": "~/.lnd/tls.cert",
+    "macaroonPath": "~/.lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+  },
+  "liquid": {
+    "rpcHost": "localhost",
+    "rpcPort": 7041,
+    "rpcUser": "elements",
+    "rpcPassword": "elements123",
+    "network": "liquidv1"
+  },
+  "logging": {
+    "level": "info",
+    "filename": "logs/payment-server.log"
+  }
+}

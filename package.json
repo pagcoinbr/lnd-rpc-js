@@ -1,0 +1,31 @@
+{
+  "name": "lnd-rpc-py",
+  "version": "1.0.0",
+  "description": "Mini server to connect bitcoin, lnd and elements to the rpc port via http call",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.9.0",
+    "@grpc/proto-loader": "^0.7.0",
+    "express": "^4.18.0",
+    "uuid": "^9.0.0",
+    "winston": "^3.10.0",
+    "axios": "^1.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "keywords": [
+    "bitcoin",
+    "lightning",
+    "liquid",
+    "rpc",
+    "payments"
+  ],
+  "author": "",
+  "license": "MIT"
+}
