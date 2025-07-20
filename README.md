@@ -1,6 +1,40 @@
-# Servidor de Pagamentos Multi-Chain com LND
+# ⚡ LND-RPC-JS ⚡
 
-Servidor HTTP para gerenciar pag### 3. Instalação Simples
+<div align="center">
+
+![Bitcoin](https://img.shields.io/badge/Bitcoin-FF9900?style=for-the-badge&logo=bitcoin&logoColor=white)
+![Lightning Network](https://img.shields.io/badge/Lightning-792EE5?style=for-the-badge&logo=lightning&logoColor=white)
+![Liquid](https://img.shields.io/badge/Liquid-00D4AA?style=for-the-badge&logo=blockchain&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-43853D?style=for-the-badge&logo=node.js&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)
+
+**🚀 Servidor HTTP Multi-Chain para Pagamentos Bitcoin**
+
+*Bitcoin on-chain • Lightning Network • Liquid (Elements)*
+
+[📖 Documentação](#-api-completa---todos-os-comandos-disponíveis) • [🔔 Webhooks](webhook_howto.md) • [⚙️ Instalação](#-instalação-e-configuração) • [🧪 Testes](#scripts-de-teste-e-validação)
+
+</div>
+
+---
+
+## 🌟 **Visão Geral**
+
+**LND-RPC-JS** é um servidor HTTP completo para gerenciar pagamentos em três redes Bitcoin: **Bitcoin on-chain**, **Lightning Network** e **Liquid (Elements)**. 
+
+Este projeto utiliza o **LND (Lightning Network Daemon)** como cliente principal para transações Bitcoin (on-chain e Lightning), eliminando a necessidade de um cliente Bitcoin Core separado. O LND oferece funcionalidades completas para ambas as redes através de uma única interface.
+
+### 🎯 **Principais Características**
+
+- ⚡ **API REST simples** para integração fácil em qualquer sistema
+- 🔒 **Autenticação robusta** com chave secreta e validação de IP
+- 🌐 **Suporte multi-rede** (Bitcoin, Lightning, Liquid) em uma única interface
+- 🔔 **Sistema de webhooks** para notificações em tempo real
+- 🤖 **Detecção automática** de tipo de pagamento (Lightning vs Bitcoin)
+- 📊 **Logs detalhados** e monitoramento completo
+- 🔧 **Scripts de automação** para instalação e gerenciamento
+
+### 3. Instalação Simples
 
 ```bash
 ./start.sh
@@ -43,11 +77,11 @@ sudo ./service.sh restart  # Reiniciar
 ./service.sh logs         # Logs em tempo real
 ```
 
-📖 **Documentação completa**: Veja [SERVICE.md](SERVICE.md) para detalhes sobre o serviço.ês redes de Bitcoin: **Bitcoin on-chain**, **Lightning Network** e **Liquid (Elements)**. 
+📖 **Documentação completa**: Veja [SERVICE.md](SERVICE.md) para detalhes sobre o serviço.
 
-Este projeto utiliza o **LND (Lightning Network Daemon)** como cliente principal para transações Bitcoin (on-chain e Lightning), eliminando a necessidade de um cliente Bitcoin Core separado. O LND oferece funcionalidades completas para ambas as redes através de uma única interface.
+---
 
-## 🌟 Funcionalidades
+## 🌟 **Principais Funcionalidades**
 
 - ✅ **Recebimento de pagamentos via HTTP** com autenticação por chave secreta e validação de IP
 - ✅ **Suporte a 3 redes**: Bitcoin on-chain, Lightning Network e Liquid
@@ -55,9 +89,29 @@ Este projeto utiliza o **LND (Lightning Network Daemon)** como cliente principal
 - ✅ **Detecção automática** de tipo de pagamento (on-chain vs Lightning)
 - ✅ **Suporte a Lightning Addresses** e invoices bolt11
 - ✅ **Sistema de filas** para pagamentos pendentes e enviados
+- ✅ **Sistema de webhooks** para notificações em tempo real sobre status dos pagamentos
 - ✅ **Consulta de saldos** unificada (wallet on-chain + canais Lightning)
 - ✅ **Logs detalhados** de todas as operações
 - ✅ **Estimativa automática de taxas** para transações on-chain
+
+### 🔔 **Sistema de Webhooks**
+
+O LND-RPC-JS inclui um sistema completo de webhooks para notificações em tempo real:
+
+- **📡 Notificações automáticas** sobre status dos pagamentos (pending, completed, failed)
+- **🔒 Verificação HMAC** para autenticidade das notificações
+- **🔄 Sistema de retry** com tentativas automáticas em caso de falha
+- **📝 Logs detalhados** de todos os webhooks enviados
+- **⚙️ Configuração flexível** via config.json
+- **🧪 Endpoint de teste** para validar implementações
+
+**Eventos suportados:**
+- `payment.pending` - Pagamento recebido e sendo processado
+- `payment.completed` - Pagamento concluído com sucesso
+- `payment.failed` - Pagamento falhou
+- `webhook.test` - Evento de teste para validação
+
+📚 **Documentação completa de webhooks**: [webhook_howto.md](webhook_howto.md)
 
 ## 🚀 Instalação e Configuração
 
@@ -152,9 +206,15 @@ x-secret-key: sua-chave-secreta-super-segura-aqui-123456
   "username": "nome_do_usuario", 
   "amount": VALOR_EM_SATOSHIS,
   "network": "TIPO_DE_REDE",
-  "destinationWallet": "DESTINO_DO_PAGAMENTO"
+  "destinationWallet": "DESTINO_DO_PAGAMENTO",
+  "webhookUrl": "https://seusite.com/webhook/pagamentos",
+  "webhookSecret": "sua-chave-webhook-secreta"
 }
 ```
+
+**⚠️ Campos de Webhook (Opcionais)**:
+- `webhookUrl`: URL onde serão enviadas notificações em tempo real sobre o status do pagamento
+- `webhookSecret`: Chave secreta para verificação de autenticidade das notificações (recomendado)
 
 #### 📋 Campos Obrigatórios
 
@@ -165,10 +225,12 @@ x-secret-key: sua-chave-secreta-super-segura-aqui-123456
 | `amount` | Number | Valor em satoshis (1 BTC = 100.000.000 sats) | `50000` |
 | `network` | String | Rede de destino: `bitcoin`, `lightning` ou `liquid` | `"lightning"` |
 | `destinationWallet` | String | Endereço, invoice ou Lightning address de destino | `"user@domain.com"` |
+| `webhookUrl` | String (Opcional) | URL para receber notificações em tempo real | `"https://seusite.com/webhook"` |
+| `webhookSecret` | String (Opcional) | Chave secreta para verificação HMAC | `"webhook-secret-123"` |
 
 #### 🎯 Exemplos Completos de Requisições
 
-**1. Pagamento Lightning com Lightning Address:**
+**1. Pagamento Lightning com Lightning Address + Webhook:**
 ```bash
 curl -X POST http://localhost:5002/payment \
   -H "Content-Type: application/json" \
@@ -178,11 +240,13 @@ curl -X POST http://localhost:5002/payment \
     "username": "alice",
     "amount": 21000,
     "network": "lightning",
-    "destinationWallet": "satoshi@walletofsatoshi.com"
+    "destinationWallet": "satoshi@walletofsatoshi.com",
+    "webhookUrl": "https://minhaloja.com/webhook/pagamentos",
+    "webhookSecret": "webhook-secret-ln-001"
   }'
 ```
 
-**2. Pagamento Lightning com Invoice (BOLT11):**
+**2. Pagamento Lightning com Invoice (BOLT11) + Webhook:**
 ```bash
 curl -X POST http://localhost:5002/payment \
   -H "Content-Type: application/json" \
@@ -192,11 +256,13 @@ curl -X POST http://localhost:5002/payment \
     "username": "bob",
     "amount": 100000,
     "network": "lightning",
-    "destinationWallet": "lnbc1m1p3xnhl2pp5j5k8stwzfhhsfl0kxhkn9k7c8g6wkrp4f8w2xqb5j7jy6h6r2qdqqcqzpgxqyz5vqsp5..."
+    "destinationWallet": "lnbc1m1p3xnhl2pp5j5k8stwzfhhsfl0kxhkn9k7c8g6wkrp4f8w2xqb5j7jy6h6r2qdqqcqzpgxqyz5vqsp5...",
+    "webhookUrl": "https://meuapp.com/api/webhook/lightning",
+    "webhookSecret": "super-secret-webhook-key"
   }'
 ```
 
-**3. Pagamento Bitcoin On-chain:**
+**3. Pagamento Bitcoin On-chain + Webhook:**
 ```bash
 curl -X POST http://localhost:5002/payment \
   -H "Content-Type: application/json" \
@@ -206,11 +272,13 @@ curl -X POST http://localhost:5002/payment \
     "username": "carol",
     "amount": 500000,
     "network": "bitcoin",
-    "destinationWallet": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+    "destinationWallet": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    "webhookUrl": "https://exchange.com/api/webhooks/btc",
+    "webhookSecret": "btc-webhook-secret-2024"
   }'
 ```
 
-**4. Pagamento Liquid:**
+**4. Pagamento Liquid + Webhook:**
 ```bash
 curl -X POST http://localhost:5002/payment \
   -H "Content-Type: application/json" \
@@ -220,7 +288,9 @@ curl -X POST http://localhost:5002/payment \
     "username": "dave",
     "amount": 75000,
     "network": "liquid",
-    "destinationWallet": "lq1qq2xvpcvfup5j8zscjq05u2wxxjcyewk7979f3mmz5l7uw5pqmx6xf5xy9chfu5v39jn8jd5x"
+    "destinationWallet": "lq1qq2xvpcvfup5j8zscjq05u2wxxjcyewk7979f3mmz5l7uw5pqmx6xf5xy9chfu5v39jn8jd5x",
+    "webhookUrl": "https://liquidapp.com/webhook/payments",
+    "webhookSecret": "liquid-notification-key"
   }'
 ```
 
@@ -266,6 +336,132 @@ O sistema detecta automaticamente o tipo baseado no formato do destino:
 | **Liquid** | Começa com `lq1` ou outros padrões | `lq1qq2xvpcvfup5j8zscjq05u2w...` |
 
 **⚠️ Importante**: Mesmo especificando `"network": "bitcoin"`, se o destino for uma Lightning address ou invoice, o pagamento será processado via Lightning Network automaticamente.
+
+## 🔔 Sistema de Webhooks - Notificações em Tempo Real
+
+O servidor suporta webhooks para notificar seu sistema sobre mudanças no status dos pagamentos em tempo real, eliminando a necessidade de fazer polling (consultas repetidas).
+
+### 📡 Como Funciona
+
+1. **Você fornece uma URL** no campo `webhookUrl` da requisição de pagamento
+2. **O servidor envia notificações HTTP POST** para sua URL quando eventos ocorrem
+3. **Seu sistema recebe e processa** as notificações automaticamente
+
+### 🎯 Eventos de Webhook
+
+| Evento | Quando é Enviado | Descrição |
+|--------|------------------|-----------|
+| `payment.pending` | Imediatamente após receber a requisição | Pagamento foi aceito e está sendo processado |
+| `payment.completed` | Quando o pagamento é confirmado | Pagamento foi processado com sucesso |
+| `payment.failed` | Quando ocorre erro no processamento | Pagamento falhou por algum motivo |
+
+### 🔧 Endpoints de Webhook
+
+#### Testar Webhook
+```bash
+curl -X POST http://localhost:5002/webhook/test \
+  -H "Content-Type: application/json" \
+  -H "x-secret-key: sua-chave-secreta-super-segura-aqui-123456" \
+  -d '{
+    "webhookUrl": "https://seusite.com/webhook/test",
+    "webhookSecret": "sua-chave-webhook"
+  }'
+```
+
+#### Estatísticas de Webhook
+```bash
+curl -H "x-secret-key: sua-chave-secreta-super-segura-aqui-123456" \
+  http://localhost:5002/webhook/stats
+```
+
+#### Reprocessar Webhooks Falhados
+```bash
+curl -X POST http://localhost:5002/webhook/retry-failed \
+  -H "x-secret-key: sua-chave-secreta-super-segura-aqui-123456"
+```
+
+### 📥 Estrutura das Notificações
+
+```json
+{
+  "event": "payment.completed",
+  "timestamp": "2024-07-20T15:30:45.123Z",
+  "data": {
+    "id": "uuid-do-pagamento",
+    "transactionId": "seu_id_unico",
+    "username": "usuario",
+    "amount": 50000,
+    "network": "lightning",
+    "destinationWallet": "destino@wallet.com",
+    "status": "sent",
+    "transactionHash": "hash_da_transacao",
+    "completedAt": "2024-07-20T15:30:45.123Z",
+    "networkFee": 150
+  },
+  "server": {
+    "name": "LND-RPC-Server",
+    "version": "2.0.0"
+  }
+}
+```
+
+### 🛡️ Verificação de Segurança
+
+Cada webhook inclui assinatura HMAC para verificação de autenticidade:
+
+**Headers enviados:**
+```
+Content-Type: application/json
+User-Agent: LND-RPC-Webhook/1.0
+X-Webhook-Signature: sha256=hash_hmac_da_mensagem
+X-Webhook-Timestamp: 1721486445
+```
+
+**Exemplo de verificação em Node.js:**
+```javascript
+const crypto = require('crypto');
+
+function verifyWebhookSignature(payload, signature, secret) {
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(payload, 'utf8')
+    .digest('hex');
+  
+  const receivedSignature = signature.replace('sha256=', '');
+  
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedSignature, 'hex'),
+    Buffer.from(receivedSignature, 'hex')
+  );
+}
+```
+
+### ⚙️ Configuração de Webhook
+
+Configure webhooks no `config.json`:
+
+```json
+{
+  "webhooks": {
+    "enabled": true,
+    "timeout": 10000,
+    "retryAttempts": 3,
+    "retryDelay": 5000,
+    "logFailures": true,
+    "saveFailedWebhooks": true
+  }
+}
+```
+
+### 🧪 Teste de Webhook
+
+Execute o script de teste de webhook:
+
+```bash
+./test-webhook.sh
+```
+
+📖 **Documentação completa**: Veja [webhook_howto.md](webhook_howto.md) para implementação detalhada de receptores de webhook.
 
 ### 💰 Consulta de Saldos
 
@@ -406,7 +602,7 @@ curl -H "x-secret-key: sua-chave-secreta-super-segura-aqui-123456" \
 
 ### 🛠️ Exemplos Práticos com Valores Reais
 
-#### Pagamento de 1.000 sats via Lightning
+#### Pagamento de 1.000 sats via Lightning + Webhook
 
 ```bash
 curl -X POST http://localhost:5002/payment \
@@ -417,11 +613,13 @@ curl -X POST http://localhost:5002/payment \
     "username": "cliente_loja",
     "amount": 1000,
     "network": "lightning", 
-    "destinationWallet": "loja@getalby.com"
+    "destinationWallet": "loja@getalby.com",
+    "webhookUrl": "https://minhaloja.com/api/webhook/coffee",
+    "webhookSecret": "coffee-payment-secret"
   }'
 ```
 
-#### Pagamento de 0.001 BTC (100.000 sats) on-chain
+#### Pagamento de 0.001 BTC (100.000 sats) on-chain + Webhook
 
 ```bash
 curl -X POST http://localhost:5002/payment \
@@ -432,7 +630,9 @@ curl -X POST http://localhost:5002/payment \
     "username": "usuario_exchange",
     "amount": 100000,
     "network": "bitcoin",
-    "destinationWallet": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+    "destinationWallet": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+    "webhookUrl": "https://exchange.com/api/webhook/withdrawal",
+    "webhookSecret": "btc-withdrawal-webhook-2024"
   }'
 ```
 
@@ -502,6 +702,18 @@ Execute o script de teste que valida todas as funcionalidades:
 - ✅ Consulta de saldos em todas as redes (bitcoin, lightning, liquid)
 - ✅ Listagem de pagamentos pendentes e enviados
 - ✅ Envio de pagamento de teste (simulação)
+
+**Script de teste de webhooks:**
+
+```bash
+./test-webhook.sh
+```
+
+**O que o script de webhook testa:**
+- ✅ Configuração e status do sistema de webhooks
+- ✅ Envio de webhook de teste
+- ✅ Pagamento com notificação webhook
+- ✅ Reprocessamento de webhooks falhados
 
 #### Teste Manual de Conectividade
 
@@ -913,7 +1125,7 @@ class LNDRPCClient:
             "x-secret-key": secret_key
         }
     
-    def send_payment(self, transaction_id, username, amount, network, destination):
+    def send_payment(self, transaction_id, username, amount, network, destination, webhook_url=None, webhook_secret=None):
         """Enviar pagamento"""
         payment_data = {
             "transactionId": transaction_id,
@@ -922,6 +1134,12 @@ class LNDRPCClient:
             "network": network,
             "destinationWallet": destination
         }
+        
+        # Adicionar webhook se fornecido
+        if webhook_url:
+            payment_data["webhookUrl"] = webhook_url
+        if webhook_secret:
+            payment_data["webhookSecret"] = webhook_secret
         
         response = requests.post(
             f"{self.server_url}/payment",
@@ -952,13 +1170,15 @@ client = LNDRPCClient(
     "sua-chave-secreta-super-segura-aqui-123456"
 )
 
-# Enviar pagamento Lightning
+# Enviar pagamento Lightning com webhook
 result = client.send_payment(
     transaction_id="py_ln_001",
     username="python_user",
     amount=25000,
     network="lightning",
-    destination="satoshi@getalby.com"
+    destination="satoshi@getalby.com",
+    webhook_url="https://meuapp.com/webhook/pagamentos",
+    webhook_secret="python-webhook-secret-123"
 )
 print(f"Pagamento enviado: {result}")
 
@@ -980,7 +1200,7 @@ class LNDRPCClient {
     };
   }
 
-  async sendPayment(transactionId, username, amount, network, destination) {
+  async sendPayment(transactionId, username, amount, network, destination, webhookUrl = null, webhookSecret = null) {
     const paymentData = {
       transactionId,
       username,
@@ -988,6 +1208,14 @@ class LNDRPCClient {
       network,
       destinationWallet: destination
     };
+
+    // Adicionar webhook se fornecido
+    if (webhookUrl) {
+      paymentData.webhookUrl = webhookUrl;
+    }
+    if (webhookSecret) {
+      paymentData.webhookSecret = webhookSecret;
+    }
 
     try {
       const response = await axios.post(
@@ -1035,13 +1263,15 @@ const client = new LNDRPCClient(
 // Exemplo com async/await
 (async () => {
   try {
-    // Enviar pagamento Bitcoin on-chain
+    // Enviar pagamento Bitcoin on-chain com webhook
     const payment = await client.sendPayment(
       'js_btc_001',
       'javascript_user',
       150000,
       'bitcoin',
-      'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh'
+      'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+      'https://meuapp.com/api/webhook/bitcoin',
+      'js-webhook-secret-2024'
     );
     console.log('Pagamento enviado:', payment);
 
@@ -1098,7 +1328,7 @@ class LNDRPCClient {
         return $decodedResponse;
     }
 
-    public function sendPayment($transactionId, $username, $amount, $network, $destination) {
+    public function sendPayment($transactionId, $username, $amount, $network, $destination, $webhookUrl = null, $webhookSecret = null) {
         $data = [
             'transactionId' => $transactionId,
             'username' => $username,
@@ -1106,6 +1336,14 @@ class LNDRPCClient {
             'network' => $network,
             'destinationWallet' => $destination
         ];
+
+        // Adicionar webhook se fornecido
+        if ($webhookUrl !== null) {
+            $data['webhookUrl'] = $webhookUrl;
+        }
+        if ($webhookSecret !== null) {
+            $data['webhookSecret'] = $webhookSecret;
+        }
 
         return $this->makeRequest('POST', '/payment', $data);
     }
@@ -1130,13 +1368,15 @@ try {
         'sua-chave-secreta-super-segura-aqui-123456'
     );
 
-    // Enviar pagamento Liquid
+    // Enviar pagamento Liquid com webhook
     $payment = $client->sendPayment(
         'php_liquid_001',
         'php_user',
         80000,
         'liquid',
-        'lq1qq2xvpcvfup5j8zscjq05u2wxxjcyewk7979f3mmz5l7uw5pqmx6xf5xy9chfu5v39jn8jd5x'
+        'lq1qq2xvpcvfup5j8zscjq05u2wxxjcyewk7979f3mmz5l7uw5pqmx6xf5xy9chfu5v39jn8jd5x',
+        'https://meusite.com/webhook/liquid',
+        'php-liquid-webhook-secret'
     );
     
     echo "Pagamento enviado: " . json_encode($payment, JSON_PRETTY_PRINT) . "\n";
@@ -1183,6 +1423,8 @@ send_payment() {
     local amount=$3
     local network=$4
     local destination=$5
+    local webhook_url=$6
+    local webhook_secret=$7
     
     local payload=$(cat <<EOF
 {
@@ -1190,7 +1432,17 @@ send_payment() {
   "username": "$username",
   "amount": $amount,
   "network": "$network",
-  "destinationWallet": "$destination"
+  "destinationWallet": "$destination"$(
+    if [ -n "$webhook_url" ]; then
+      echo ",
+  \"webhookUrl\": \"$webhook_url\""
+    fi
+  )$(
+    if [ -n "$webhook_secret" ]; then
+      echo ",
+  \"webhookSecret\": \"$webhook_secret\""
+    fi
+  )
 }
 EOF
 )
@@ -1212,13 +1464,15 @@ get_balance "bitcoin" | jq .
 get_balance "lightning" | jq .
 get_balance "all" | jq .
 
-echo -e "\n=== Teste de Pagamento ==="
+echo -e "\n=== Teste de Pagamento com Webhook ==="
 send_payment \
     "bash_test_$(date +%s)" \
     "bash_user" \
     5000 \
     "lightning" \
-    "test@walletofsatoshi.com" | jq .
+    "test@walletofsatoshi.com" \
+    "https://webhook.site/your-unique-id" \
+    "bash-webhook-secret" | jq .
 
 echo -e "\n=== Pagamentos Pendentes ==="
 make_request "GET" "/pending" | jq .
