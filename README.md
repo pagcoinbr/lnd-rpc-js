@@ -106,10 +106,10 @@ x-secret-key: sua-chave-secreta-super-segura-aqui-123456
 ```json
 {
   "transactionId": "0198244a9ba37c8db6206de62db528c8",
-  "username": "brunodasilva",
+  "username": "mariasilva",
   "amount": 123456,
   "network": "lightning",
-  "destinationWallet": "satiricrocket57@walletofsatoshi.com"
+  "destinationWallet": "satoshinakamoto@walletofsatoshi.com"
 }
 ```
 
