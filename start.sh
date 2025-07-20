@@ -94,6 +94,24 @@ echo "🎯 Iniciando servidor na porta 5002..."
 echo "📝 Logs serão salvos em logs/payment-server.log"
 echo "🔑 Certifique-se de usar a chave secreta correta no header 'x-secret-key'"
 echo ""
+echo "💡 Para configurar como serviço systemd (recomendado para produção):"
+echo "   sudo ./service.sh install"
+echo "   sudo ./service.sh start"
+echo ""
+
+# Verificar se foi passado argumento para instalar como serviço
+if [ "$1" = "--service" ] || [ "$1" = "-s" ]; then
+    echo "🔧 Configurando como serviço systemd..."
+    if [ "$EUID" -eq 0 ]; then
+        ./service.sh install
+        ./service.sh start
+        echo "✅ Serviço configurado! Use 'sudo systemctl status lnd-rpc-js' para verificar"
+        exit 0
+    else
+        echo "❌ Para configurar como serviço, execute: sudo $0 --service"
+        exit 1
+    fi
+fi
 
 # Iniciar servidor
 node src/server.js

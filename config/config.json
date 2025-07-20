@@ -11,10 +11,22 @@
   },
   "liquid": {
     "rpcHost": "localhost",
-    "rpcPort": 7041,
+    "rpcPort": 7040,
     "rpcUser": "test",
     "rpcPassword": "test",
     "network": "liquidtestnet"
+  },
+  "webhooks": {
+    "enabled": true,
+    "timeout": 10000,
+    "retryAttempts": 3,
+    "retryDelay": 5000,
+    "defaultHeaders": {
+      "User-Agent": "LND-RPC-Webhook/1.0",
+      "Content-Type": "application/json"
+    },
+    "logFailures": true,
+    "saveFailedWebhooks": true
   },
   "logging": {
     "level": "info",

@@ -8,6 +8,14 @@ class LiquidRPC {
     
     // Asset ID do L-BTC (Liquid Bitcoin)
     this.LBTC_ASSET_ID = '6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d';
+    this.TEST_ASSET_ID = '38fca2d939696061a8f76d4e6b5eecd54e3b4221c846f24a6b279e79952850a5'; // Exemplo de asset ID para testes
+    
+    // Mapeamento de asset IDs para nomes amigáveis
+    this.assetNames = {
+      'bitcoin': 'L-BTC',
+      [this.LBTC_ASSET_ID]: 'L-BTC',
+      [this.TEST_ASSET_ID]: 'TEST'
+    };
   }
 
   async rpcCall(method, params = []) {
@@ -35,6 +43,10 @@ class LiquidRPC {
     }
   }
 
+  getAssetName(assetId) {
+    return this.assetNames[assetId] || assetId;
+  }
+
   async getBalance() {
     try {
       // Obter saldo de todos os assets
@@ -43,15 +55,22 @@ class LiquidRPC {
       // Obter saldo não confirmado
       const unconfirmedBalances = await this.rpcCall('getunconfirmedbalance');
       
-      // Buscar especificamente L-BTC
-      const lbtcBalance = balances[this.LBTC_ASSET_ID] || 0;
-      const lbtcUnconfirmed = unconfirmedBalances[this.LBTC_ASSET_ID] || 0;
+      // Buscar especificamente L-BTC - Elements/Liquid pode retornar como "bitcoin" ou pelo asset ID
+      const lbtcBalance = balances['bitcoin'] || balances[this.LBTC_ASSET_ID] || 0;
+      const lbtcUnconfirmed = unconfirmedBalances['bitcoin'] || unconfirmedBalances[this.LBTC_ASSET_ID] || 0;
+      
+      // Criar objeto de assets com nomes amigáveis
+      const namedAssets = {};
+      for (const [assetId, balance] of Object.entries(balances)) {
+        const assetName = this.getAssetName(assetId);
+        namedAssets[assetName] = balance;
+      }
       
       return {
         confirmed: Math.round(lbtcBalance * 100000000), // Convert to satoshis
         unconfirmed: Math.round(lbtcUnconfirmed * 100000000),
         total: Math.round((lbtcBalance + lbtcUnconfirmed) * 100000000),
-        assets: balances // Incluir todos os assets para referência
+        assets: namedAssets // Assets com nomes amigáveis
       };
     } catch (error) {
       this.logger.error('Erro ao consultar saldo Liquid:', error);
@@ -213,8 +232,9 @@ class LiquidRPC {
         if (balance > 0) {
           assets.push({
             assetId: assetId,
+            assetName: this.getAssetName(assetId),
             balance: Math.round(balance * 100000000),
-            isLBTC: assetId === this.LBTC_ASSET_ID
+            isLBTC: assetId === this.LBTC_ASSET_ID || assetId === 'bitcoin'
           });
         }
       }

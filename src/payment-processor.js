@@ -3,17 +3,28 @@ const path = require('path');
 const config = require('../config/config.json');
 const LightningRPC = require('./rpc/lightning-rpc');
 const LiquidRPC = require('./rpc/liquid-rpc');
+const WebhookManager = require('./webhook-manager');
 
 class PaymentProcessor {
   constructor(logger) {
     this.logger = logger;
     this.lightningRPC = new LightningRPC(config.lightning, logger);
     this.liquidRPC = new LiquidRPC(config.liquid, logger);
+    this.webhookManager = new WebhookManager(logger);
   }
 
   async processPayment(paymentRequest) {
     try {
       this.logger.info(`Processando pagamento: ${paymentRequest.id}`);
+      
+      // Enviar webhook de pagamento pendente se configurado
+      if (paymentRequest.webhookUrl) {
+        await this.webhookManager.sendPaymentPendingWebhook(
+          paymentRequest.webhookUrl, 
+          paymentRequest,
+          paymentRequest.webhookSecret
+        );
+      }
       
       let result;
       const network = paymentRequest.network.toLowerCase();
@@ -47,6 +58,15 @@ class PaymentProcessor {
       paymentRequest.completedAt = new Date().toISOString();
       paymentRequest.networkFee = result.fee || 0;
       
+      // Enviar webhook de pagamento concluído se configurado
+      if (paymentRequest.webhookUrl) {
+        await this.webhookManager.sendPaymentCompletedWebhook(
+          paymentRequest.webhookUrl, 
+          paymentRequest,
+          paymentRequest.webhookSecret
+        );
+      }
+      
       // Mover arquivo de payment_req para payment_sent
       await this.movePaymentFile(paymentRequest);
       
@@ -61,6 +81,15 @@ class PaymentProcessor {
       paymentRequest.status = 'error';
       paymentRequest.error = error.message;
       paymentRequest.errorAt = new Date().toISOString();
+      
+      // Enviar webhook de pagamento falhado se configurado
+      if (paymentRequest.webhookUrl) {
+        await this.webhookManager.sendPaymentFailedWebhook(
+          paymentRequest.webhookUrl, 
+          paymentRequest,
+          paymentRequest.webhookSecret
+        );
+      }
       
       // Salvar arquivo com erro
       await this.savePaymentWithError(paymentRequest);

@@ -52,7 +52,15 @@ const paymentProcessor = new PaymentProcessor(logger);
 // Endpoint para receber requisições de pagamento
 app.post('/payment', async (req, res) => {
   try {
-    const { transactionId, username, amount, network, destinationWallet } = req.body;
+    const { 
+      transactionId, 
+      username, 
+      amount, 
+      network, 
+      destinationWallet,
+      webhookUrl,
+      webhookSecret 
+    } = req.body;
     
     // Validar dados obrigatórios
     if (!transactionId || !username || !amount || !network || !destinationWallet) {
@@ -70,6 +78,14 @@ app.post('/payment', async (req, res) => {
       });
     }
     
+    // Validar URL do webhook se fornecida
+    if (webhookUrl && !paymentProcessor.webhookManager.validateWebhookUrl(webhookUrl)) {
+      return res.status(400).json({ 
+        error: 'URL de webhook inválida',
+        message: 'A URL deve ser um endereço HTTP ou HTTPS válido'
+      });
+    }
+    
     // Criar objeto de requisição
     const paymentRequest = {
       id: uuidv4(),
@@ -78,6 +94,8 @@ app.post('/payment', async (req, res) => {
       amount: parseInt(amount),
       network: network.toLowerCase(),
       destinationWallet,
+      webhookUrl: webhookUrl || null,
+      webhookSecret: webhookSecret || null,
       timestamp: new Date().toISOString(),
       status: 'pending'
     };
@@ -209,6 +227,106 @@ app.get('/sent', (req, res) => {
 });
 
 // Endpoint para consultar todos os saldos
+app.get('/balance/all', async (req, res) => {
+  try {
+    const allBalances = await paymentProcessor.getAllBalances();
+    
+    res.json({
+      success: true,
+      balances: allBalances
+    });
+    
+  } catch (error) {
+    logger.error(`Erro ao consultar todos os saldos: ${error.message}`, error);
+    res.status(500).json({ 
+      error: 'Erro ao consultar saldos',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint para testar webhook
+app.post('/webhook/test', async (req, res) => {
+  try {
+    const { webhookUrl, webhookSecret } = req.body;
+    
+    if (!webhookUrl) {
+      return res.status(400).json({ 
+        error: 'URL de webhook é obrigatória',
+        required: ['webhookUrl']
+      });
+    }
+    
+    // Validar URL do webhook
+    if (!paymentProcessor.webhookManager.validateWebhookUrl(webhookUrl)) {
+      return res.status(400).json({ 
+        error: 'URL de webhook inválida',
+        message: 'A URL deve ser um endereço HTTP ou HTTPS válido'
+      });
+    }
+    
+    logger.info(`Testando webhook: ${webhookUrl}`);
+    
+    const success = await paymentProcessor.webhookManager.sendTestWebhook(webhookUrl, webhookSecret);
+    
+    res.json({
+      success: success,
+      message: success ? 'Webhook de teste enviado com sucesso' : 'Falha ao enviar webhook de teste',
+      webhookUrl: webhookUrl,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    logger.error(`Erro ao testar webhook: ${error.message}`, error);
+    res.status(500).json({ 
+      error: 'Erro ao testar webhook',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint para obter estatísticas de webhook
+app.get('/webhook/stats', (req, res) => {
+  try {
+    const stats = paymentProcessor.webhookManager.getWebhookStats();
+    
+    res.json({
+      success: true,
+      stats: stats
+    });
+    
+  } catch (error) {
+    logger.error(`Erro ao obter estatísticas de webhook: ${error.message}`, error);
+    res.status(500).json({ 
+      error: 'Erro ao obter estatísticas de webhook',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint para reprocessar webhooks falhados
+app.post('/webhook/retry-failed', async (req, res) => {
+  try {
+    logger.info('Iniciando reprocessamento de webhooks falhados');
+    
+    await paymentProcessor.webhookManager.reprocessFailedWebhooks();
+    
+    res.json({
+      success: true,
+      message: 'Reprocessamento de webhooks falhados concluído',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    logger.error(`Erro ao reprocessar webhooks: ${error.message}`, error);
+    res.status(500).json({ 
+      error: 'Erro ao reprocessar webhooks',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint original para consultar todos os saldos (manter compatibilidade)
 app.get('/balance/all', async (req, res) => {
   try {
     const allBalances = await paymentProcessor.getAllBalances();
