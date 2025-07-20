@@ -80,15 +80,12 @@ check_port() {
 CONFIG_FILE="config/config.json"
 
 # Extrair configurações usando node
-BITCOIN_HOST=$(node -e "console.log(require('./config/config.json').bitcoin.rpcHost)")
-BITCOIN_PORT=$(node -e "console.log(require('./config/config.json').bitcoin.rpcPort)")
 LIGHTNING_HOST=$(node -e "console.log(require('./config/config.json').lightning.host.split(':')[0])")
 LIGHTNING_PORT=$(node -e "console.log(require('./config/config.json').lightning.host.split(':')[1])")
 LIQUID_HOST=$(node -e "console.log(require('./config/config.json').liquid.rpcHost)")
 LIQUID_PORT=$(node -e "console.log(require('./config/config.json').liquid.rpcPort)")
 
 # Verificar conectividade
-check_port $BITCOIN_HOST $BITCOIN_PORT "Bitcoin Core"
 check_port $LIGHTNING_HOST $LIGHTNING_PORT "Lightning (LND)"
 check_port $LIQUID_HOST $LIQUID_PORT "Liquid/Elements"
 

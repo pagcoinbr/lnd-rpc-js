@@ -11,7 +11,7 @@
   },
   "liquid": {
     "rpcHost": "localhost",
-    "rpcPort": 7040,
+    "rpcPort": 7041,
     "rpcUser": "test",
     "rpcPassword": "test",
     "network": "liquidtestnet"
