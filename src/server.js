@@ -1,3 +1,31 @@
+/**
+ * SERVER.JS - Servidor HTTP Principal do Sistema de Pagamentos
+ * 
+ * Este arquivo implementa a API REST que serve como gateway para processamento
+ * de pagamentos em múltiplas redes blockchain (Bitcoin, Lightning, Liquid).
+ * 
+ * FUNCIONALIDADES PRINCIPAIS:
+ * - API REST para requisições de pagamento
+ * - Autenticação por IP e chave secreta
+ * - Consulta de saldos por rede
+ * - Gerenciamento de webhooks
+ * - Monitoramento de transações pendentes/enviadas
+ * 
+ * ENDPOINTS DISPONÍVEIS:
+ * - POST /payment - Processar novos pagamentos
+ * - GET /balance/:network - Consultar saldos
+ * - GET /pending - Listar pagamentos pendentes
+ * - GET /sent - Listar pagamentos enviados
+ * - POST /webhook/test - Testar webhook
+ * - GET /webhook/stats - Estatísticas de webhooks
+ * - POST /webhook/retry-failed - Reprocessar webhooks falhados
+ * 
+ * SEGURANÇA:
+ * - Whitelist de IPs permitidos
+ * - Autenticação via header X-Secret-Key
+ * - Logs detalhados de todas as operações
+ */
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -6,7 +34,8 @@ const winston = require('winston');
 const config = require('../config/config.json');
 const PaymentProcessor = require('./payment-processor');
 
-// Configurar logger
+// ========== CONFIGURAÇÃO DO SISTEMA DE LOGS ==========
+// Configurar logger estruturado com múltiplos transportes
 const logger = winston.createLogger({
   level: config.logging.level,
   format: winston.format.combine(
@@ -15,43 +44,86 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
+    // Log para arquivo - para persistência e análise posterior
     new winston.transports.File({ filename: config.logging.filename }),
+    // Log para console - para desenvolvimento e debugging
     new winston.transports.Console({
       format: winston.format.simple()
     })
   ]
 });
 
+// ========== CONFIGURAÇÃO DO SERVIDOR EXPRESS ==========
 const app = express();
+// Middleware para parsing de JSON nas requisições
 app.use(express.json());
 
-// Middleware para validar IP e chave secreta
+// ========== MIDDLEWARE DE SEGURANÇA ==========
+/**
+ * Middleware de autenticação e autorização
+ * 
+ * Implementa dupla validação de segurança:
+ * 1. Validação de IP - apenas IPs whitelist podem acessar
+ * 2. Validação de chave secreta - header X-Secret-Key obrigatório
+ * 
+ * Casos especiais:
+ * - IPs localhost (::1, 127.0.0.1) sempre permitidos para desenvolvimento
+ * - Logs detalhados de tentativas de acesso não autorizadas
+ */
 app.use((req, res, next) => {
   const clientIp = req.ip || req.connection.remoteAddress;
   logger.info(`Requisição recebida de IP: ${clientIp}`);
   
-  // Verificar IP permitido
+  // ========== VALIDAÇÃO DE IP ==========
+  // Verificar se o IP está na lista de IPs permitidos ou é localhost
   if (!config.server.allowedIps.includes(clientIp) && clientIp !== '::1' && clientIp !== '127.0.0.1') {
     logger.warn(`IP não autorizado: ${clientIp}`);
     return res.status(403).json({ error: 'IP não autorizado' });
   }
   
-  // Verificar chave secreta
+  // ========== VALIDAÇÃO DE CHAVE SECRETA ==========
+  // Verificar se a chave secreta no header corresponde à configurada
   const secretKey = req.headers['x-secret-key'];
   if (secretKey !== config.server.secretKey) {
     logger.warn(`Chave secreta inválida de IP: ${clientIp}`);
     return res.status(401).json({ error: 'Chave secreta inválida' });
   }
   
+  // Se passou nas validações, continuar para o próximo middleware
   next();
 });
 
-// Instanciar processador de pagamentos
+// ========== INICIALIZAÇÃO DO PROCESSADOR DE PAGAMENTOS ==========
+// Instanciar o processador principal que coordena todas as operações
 const paymentProcessor = new PaymentProcessor(logger);
 
-// Endpoint para receber requisições de pagamento
+// ========== ENDPOINT PRINCIPAL: PROCESSAR PAGAMENTOS ==========
+/**
+ * POST /payment - Endpoint principal para processamento de pagamentos
+ * 
+ * Recebe requisições de pagamento e coordena todo o fluxo:
+ * 1. Validação de dados obrigatórios
+ * 2. Validação de rede suportada  
+ * 3. Validação de webhook (se fornecido)
+ * 4. Criação de ID único para rastreamento
+ * 5. Persistência da requisição em arquivo
+ * 6. Processamento assíncrono do pagamento
+ * 7. Retorno de confirmação com ID e hash da transação
+ * 
+ * DADOS OBRIGATÓRIOS:
+ * - transactionId: ID único da transação no sistema cliente
+ * - username: Usuário que solicitou o pagamento
+ * - amount: Valor em satoshis
+ * - network: Rede de destino (bitcoin/lightning/liquid)
+ * - destinationWallet: Endereço/invoice de destino
+ * 
+ * DADOS OPCIONAIS:
+ * - webhookUrl: URL para notificações de status
+ * - webhookSecret: Chave para assinatura HMAC dos webhooks
+ */
 app.post('/payment', async (req, res) => {
   try {
+    // ========== EXTRAÇÃO E VALIDAÇÃO DOS DADOS ==========
     const { 
       transactionId, 
       username, 
@@ -86,32 +158,36 @@ app.post('/payment', async (req, res) => {
       });
     }
     
-    // Criar objeto de requisição
+    // ========== CRIAÇÃO DO OBJETO DE REQUISIÇÃO ==========
+    // Criar objeto padronizado com ID único e timestamp
     const paymentRequest = {
-      id: uuidv4(),
+      id: uuidv4(), // UUID v4 para garantir unicidade
       transactionId,
       username,
-      amount: parseInt(amount),
+      amount: parseInt(amount), // Garantir que é um inteiro
       network: network.toLowerCase(),
       destinationWallet,
       webhookUrl: webhookUrl || null,
       webhookSecret: webhookSecret || null,
       timestamp: new Date().toISOString(),
-      status: 'pending'
+      status: 'pending' // Status inicial
     };
     
     logger.info(`Nova requisição de pagamento: ${JSON.stringify(paymentRequest)}`);
     
-    // Salvar requisição no diretório payment_req
+    // ========== PERSISTÊNCIA DA REQUISIÇÃO ==========
+    // Salvar requisição no diretório payment_req para rastreamento
     const filename = `${paymentRequest.id}_${transactionId}.json`;
     const filepath = path.join(__dirname, '../payment_req', filename);
     
     fs.writeFileSync(filepath, JSON.stringify(paymentRequest, null, 2));
     logger.info(`Requisição salva: ${filepath}`);
     
-    // Processar pagamento
+    // ========== PROCESSAMENTO DO PAGAMENTO ==========
+    // Enviar para processamento assíncrono
     const result = await paymentProcessor.processPayment(paymentRequest);
     
+    // ========== RESPOSTA DE SUCESSO ==========
     res.json({
       success: true,
       message: 'Pagamento processado com sucesso',
@@ -120,6 +196,7 @@ app.post('/payment', async (req, res) => {
     });
     
   } catch (error) {
+    // ========== TRATAMENTO DE ERRO ==========
     logger.error(`Erro ao processar pagamento: ${error.message}`, error);
     res.status(500).json({ 
       error: 'Erro interno do servidor',
@@ -128,11 +205,26 @@ app.post('/payment', async (req, res) => {
   }
 });
 
-// Endpoint para consultar saldo
+// ========== ENDPOINT: CONSULTAR SALDOS ==========
+/**
+ * GET /balance/:network - Consulta saldos por rede específica
+ * 
+ * Permite consultar o saldo disponível em cada rede suportada:
+ * - bitcoin: Saldo on-chain do Bitcoin
+ * - lightning: Saldo dos canais Lightning Network
+ * - liquid: Saldo na rede Liquid/Elements
+ * - all: Todos os saldos simultaneamente
+ * 
+ * Útil para:
+ * - Verificar disponibilidade antes de enviar pagamentos
+ * - Monitoramento de liquidez
+ * - Dashboards de administração
+ */
 app.get('/balance/:network', async (req, res) => {
   try {
     const { network } = req.params;
     
+    // Validar rede suportada
     if (!['bitcoin', 'lightning', 'liquid', 'all'].includes(network.toLowerCase())) {
       return res.status(400).json({ 
         error: 'Rede não suportada',
@@ -141,14 +233,16 @@ app.get('/balance/:network', async (req, res) => {
     }
     
     if (network.toLowerCase() === 'all') {
-      // Obter todos os saldos
+      // ========== CONSULTAR TODOS OS SALDOS ==========
+      // Obter saldos de todas as redes em paralelo para melhor performance
       const allBalances = await paymentProcessor.getAllBalances();
       res.json({
         success: true,
         balances: allBalances
       });
     } else {
-      // Obter saldo específico
+      // ========== CONSULTAR SALDO ESPECÍFICO ==========
+      // Obter saldo de uma rede específica
       const balance = await paymentProcessor.getBalance(network.toLowerCase());
       res.json({
         success: true,
@@ -166,12 +260,25 @@ app.get('/balance/:network', async (req, res) => {
   }
 });
 
-// Endpoint para listar transações pendentes
+// ========== ENDPOINT: LISTAR TRANSAÇÕES PENDENTES ==========
+/**
+ * GET /pending - Lista todas as transações pendentes
+ * 
+ * Lê o diretório payment_req/ e retorna todas as requisições que ainda
+ * não foram processadas. Inclui tanto requisições aguardando processamento
+ * quanto aquelas que falharam (arquivos com prefixo ERROR_).
+ * 
+ * Útil para:
+ * - Monitoramento de fila de processamento
+ * - Debugging de transações presas
+ * - Relatórios administrativos
+ */
 app.get('/pending', (req, res) => {
   try {
     const pendingDir = path.join(__dirname, '../payment_req');
     const files = fs.readdirSync(pendingDir);
     
+    // Processar cada arquivo e extrair dados da requisição
     const pendingPayments = files.map(file => {
       const filepath = path.join(pendingDir, file);
       const data = JSON.parse(fs.readFileSync(filepath, 'utf8'));

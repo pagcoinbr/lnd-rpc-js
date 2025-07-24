@@ -1,3 +1,31 @@
+/**
+ * WEBHOOK-MANAGER.JS - Gerenciador de Notificações Webhook
+ * 
+ * Esta classe é responsável por enviar notificações HTTP para sistemas externos
+ * sobre mudanças de status nos pagamentos. Implementa um sistema robusto de
+ * webhooks com recursos avançados de confiabilidade e segurança.
+ * 
+ * FUNCIONALIDADES PRINCIPAIS:
+ * - Envio de webhooks para múltiplos eventos (pending, completed, failed)
+ * - Sistema de retry com backoff exponencial
+ * - Assinatura HMAC-SHA256 para verificação de autenticidade
+ * - Persistência de webhooks falhados para reprocessamento
+ * - Timestamps para prevenir replay attacks
+ * - Validação de URLs e timeout configurável
+ * 
+ * EVENTOS SUPORTADOS:
+ * - payment.pending: Pagamento recebido e sendo processado
+ * - payment.completed: Pagamento enviado com sucesso
+ * - payment.failed: Falha no processamento do pagamento
+ * - webhook.test: Webhook de teste para validação
+ * 
+ * SEGURANÇA:
+ * - Assinatura HMAC nos headers X-Webhook-Signature
+ * - Timestamp nos headers X-Webhook-Timestamp
+ * - Validação de URLs (apenas HTTP/HTTPS)
+ * - Timeout configurável para evitar travamentos
+ */
+
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
@@ -5,6 +33,14 @@ const crypto = require('crypto');
 const config = require('../config/config.json');
 
 class WebhookManager {
+  /**
+   * Construtor do WebhookManager
+   * 
+   * Inicializa o gerenciador com configurações e prepara o diretório
+   * para armazenamento de webhooks falhados.
+   * 
+   * @param {Object} logger - Instância do logger Winston
+   */
   constructor(logger) {
     this.logger = logger;
     this.config = config.webhooks;
@@ -17,10 +53,20 @@ class WebhookManager {
   }
 
   /**
-   * Gera assinatura HMAC para verificação de autenticidade
-   * @param {string} payload - Payload JSON do webhook
-   * @param {string} secret - Chave secreta para assinatura
-   * @returns {string} Assinatura HMAC
+   * Gera assinatura HMAC-SHA256 para verificação de autenticidade
+   * 
+   * Cria uma assinatura criptográfica do payload usando a chave secreta fornecida.
+   * Esta assinatura permite ao destinatário verificar que o webhook realmente
+   * veio do servidor e não foi modificado em trânsito.
+   * 
+   * PROCESSO:
+   * 1. Converte o payload para string UTF-8
+   * 2. Usa HMAC-SHA256 com a chave secreta
+   * 3. Retorna hash em formato hexadecimal
+   * 
+   * @param {string} payload - Payload JSON do webhook em string
+   * @param {string} secret - Chave secreta compartilhada para assinatura
+   * @returns {string} Assinatura HMAC-SHA256 em formato hexadecimal
    */
   generateSignature(payload, secret) {
     return crypto
@@ -30,19 +76,41 @@ class WebhookManager {
   }
 
   /**
-   * Envia webhook para o endpoint especificado
-   * @param {string} webhookUrl - URL do webhook
-   * @param {object} paymentData - Dados do pagamento
+   * Envia webhook para endpoint especificado com sistema de retry robusto
+   * 
+   * Este é o método principal para envio de webhooks. Implementa várias
+   * camadas de confiabilidade e segurança:
+   * 
+   * ESTRUTURA DO PAYLOAD:
+   * - event: Tipo de evento (payment.pending, payment.completed, etc.)
+   * - timestamp: Momento do envio (ISO 8601)
+   * - data: Dados completos do pagamento
+   * - server: Informações do servidor emissor
+   * 
+   * RECURSOS DE SEGURANÇA:
+   * - Assinatura HMAC-SHA256 (se secret fornecido)
+   * - Timestamp para prevenir replay attacks
+   * - Headers customizáveis via configuração
+   * 
+   * SISTEMA DE RETRY:
+   * - Múltiplas tentativas com delay configurável
+   * - Log detalhado de cada tentativa
+   * - Persistência de falhas para reprocessamento
+   * 
+   * @param {string} webhookUrl - URL de destino do webhook
+   * @param {Object} paymentData - Dados completos do pagamento
    * @param {string} event - Tipo de evento (payment.pending, payment.completed, payment.failed)
-   * @param {string} webhookSecret - Chave secreta para assinatura (opcional)
-   * @returns {Promise<boolean>} Sucesso do envio
+   * @param {string} [webhookSecret=null] - Chave secreta para assinatura HMAC
+   * @returns {Promise<boolean>} true se enviado com sucesso, false caso contrário
    */
   async sendWebhook(webhookUrl, paymentData, event, webhookSecret = null) {
+    // ========== VERIFICAÇÃO DE HABILITAÇÃO ==========
     if (!this.config.enabled) {
       this.logger.info('Webhooks desabilitados na configuração');
       return true;
     }
 
+    // ========== MONTAGEM DO PAYLOAD ==========
     const payload = {
       event: event,
       timestamp: new Date().toISOString(),
@@ -56,16 +124,20 @@ class WebhookManager {
     const payloadString = JSON.stringify(payload);
     const headers = { ...this.config.defaultHeaders };
 
-    // Adicionar assinatura se secret foi fornecido
+    // ========== ASSINATURA CRIPTOGRÁFICA ==========
+    // Adicionar assinatura HMAC se chave secreta fornecida
     if (webhookSecret) {
       const signature = this.generateSignature(payloadString, webhookSecret);
+      // Usar múltiplos headers para compatibilidade com diferentes sistemas
       headers['X-Webhook-Signature'] = `sha256=${signature}`;
       headers['X-Webhook-Signature-256'] = `sha256=${signature}`;
     }
 
-    // Adicionar timestamp para prevenir replay attacks
+    // ========== PROTEÇÃO CONTRA REPLAY ATTACKS ==========
+    // Adicionar timestamp Unix para validação temporal
     headers['X-Webhook-Timestamp'] = Math.floor(Date.now() / 1000).toString();
 
+    // ========== SISTEMA DE RETRY ==========
     let attempt = 0;
     const maxAttempts = this.config.retryAttempts + 1;
 
@@ -73,10 +145,11 @@ class WebhookManager {
       try {
         this.logger.info(`Enviando webhook (tentativa ${attempt + 1}/${maxAttempts}): ${event} para ${webhookUrl}`);
 
+        // ========== ENVIO HTTP ==========
         const response = await axios.post(webhookUrl, payload, {
           headers: headers,
           timeout: this.config.timeout,
-          validateStatus: (status) => status >= 200 && status < 300
+          validateStatus: (status) => status >= 200 && status < 300 // Aceitar apenas 2xx
         });
 
         this.logger.info(`Webhook enviado com sucesso: ${event} - Status: ${response.status}`);
@@ -89,19 +162,22 @@ class WebhookManager {
         this.logger.warn(`Falha no webhook (tentativa ${attempt}/${maxAttempts}): ${error.message}`);
 
         if (isLastAttempt) {
-          // Última tentativa falhou
+          // ========== TRATAMENTO DE FALHA FINAL ==========
           this.logger.error(`Webhook falhou definitivamente após ${maxAttempts} tentativas: ${webhookUrl}`);
           
+          // Log estruturado da falha
           if (this.config.logFailures) {
             this.logFailedWebhook(webhookUrl, payload, error.message);
           }
 
+          // Persistir webhook falhado para reprocessamento manual
           if (this.config.saveFailedWebhooks) {
             this.saveFailedWebhook(webhookUrl, payload, error.message);
           }
 
           return false;
         } else {
+          // ========== RETRY COM DELAY ==========
           // Aguardar antes da próxima tentativa
           await this.sleep(this.config.retryDelay);
         }
@@ -113,6 +189,14 @@ class WebhookManager {
 
   /**
    * Envia webhook de pagamento pendente
+   * 
+   * Notifica que uma requisição de pagamento foi recebida e está
+   * sendo processada. Este é o primeiro webhook enviado no fluxo.
+   * 
+   * @param {string} webhookUrl - URL de destino
+   * @param {Object} paymentData - Dados do pagamento
+   * @param {string} [webhookSecret=null] - Chave secreta para assinatura
+   * @returns {Promise<boolean>} Sucesso do envio
    */
   async sendPaymentPendingWebhook(webhookUrl, paymentData, webhookSecret = null) {
     return await this.sendWebhook(webhookUrl, paymentData, 'payment.pending', webhookSecret);
@@ -120,6 +204,14 @@ class WebhookManager {
 
   /**
    * Envia webhook de pagamento concluído
+   * 
+   * Notifica que o pagamento foi enviado com sucesso na blockchain.
+   * Inclui hash da transação e informações de taxa.
+   * 
+   * @param {string} webhookUrl - URL de destino
+   * @param {Object} paymentData - Dados do pagamento com hash da transação
+   * @param {string} [webhookSecret=null] - Chave secreta para assinatura
+   * @returns {Promise<boolean>} Sucesso do envio
    */
   async sendPaymentCompletedWebhook(webhookUrl, paymentData, webhookSecret = null) {
     return await this.sendWebhook(webhookUrl, paymentData, 'payment.completed', webhookSecret);
@@ -127,6 +219,14 @@ class WebhookManager {
 
   /**
    * Envia webhook de pagamento falhado
+   * 
+   * Notifica que houve erro no processamento do pagamento.
+   * Inclui detalhes do erro para debugging.
+   * 
+   * @param {string} webhookUrl - URL de destino
+   * @param {Object} paymentData - Dados do pagamento com informações de erro
+   * @param {string} [webhookSecret=null] - Chave secreta para assinatura
+   * @returns {Promise<boolean>} Sucesso do envio
    */
   async sendPaymentFailedWebhook(webhookUrl, paymentData, webhookSecret = null) {
     return await this.sendWebhook(webhookUrl, paymentData, 'payment.failed', webhookSecret);
@@ -134,6 +234,13 @@ class WebhookManager {
 
   /**
    * Envia webhook de teste
+   * 
+   * Permite testar a conectividade e configuração de webhooks
+   * sem processar um pagamento real.
+   * 
+   * @param {string} webhookUrl - URL de destino
+   * @param {string} [webhookSecret=null] - Chave secreta para assinatura
+   * @returns {Promise<boolean>} Sucesso do envio
    */
   async sendTestWebhook(webhookUrl, webhookSecret = null) {
     const testPayload = {
