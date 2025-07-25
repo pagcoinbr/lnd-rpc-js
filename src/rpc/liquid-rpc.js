@@ -201,10 +201,6 @@ class LiquidRPC {
    */
   async sendPayment(destinationAddress, amountSats, assetId = null) {
     try {
-      // ========== CONFIGURAÇÃO DO ASSET ==========
-      // Usar L-BTC como padrão se não especificado
-      const asset = assetId || this.LBTC_ASSET_ID;
-      
       // Converter satoshis para unidade Bitcoin (1 BTC = 100,000,000 sats)
       const amountBTC = amountSats / 100000000;
       
@@ -216,53 +212,19 @@ class LiquidRPC {
         throw new Error(`Endereço Liquid inválido: ${destinationAddress}`);
       }
       
-      // ========== ESTIMATIVA DE TAXA ==========
-      const feeRate = await this.estimateFee();
-      
-      // ========== PREPARAÇÃO DOS OUTPUTS ==========
-      const outputs = {};
-      outputs[destinationAddress] = amountBTC;
-      
-      // ========== CRIAÇÃO DE TRANSAÇÃO RAW ==========
-      const rawTx = await this.rpcCall('createrawtransaction', [
-        [], // inputs (será selecionado automaticamente no funding)
-        outputs,
-        0, // locktime (0 = sem restrição temporal)
-        false, // replaceable (RBF - Replace By Fee)
-        asset // asset para o output
-      ]);
-      
-      // ========== FINANCIAMENTO DA TRANSAÇÃO ==========
-      // Selecionar UTXOs automaticamente e calcular troco
-      const fundedTx = await this.rpcCall('fundrawtransaction', [rawTx, {
-        feeRate: feeRate,
-        includeWatching: false,
-        lockUnspents: false,
-        reserveChangeKey: true,
-        changeAddress: await this.getNewAddress(),
-        changePosition: -1,
-        includeUnsafe: false
-      }]);
-      
-      // ========== ASSINATURA DA TRANSAÇÃO ==========
-      const signedTx = await this.rpcCall('signrawtransactionwithwallet', [fundedTx.hex]);
-      
-      if (!signedTx.complete) {
-        throw new Error('Não foi possível assinar a transação completamente');
-      }
-      
-      // ========== BROADCAST PARA A REDE ==========
-      const txid = await this.rpcCall('sendrawtransaction', [signedTx.hex]);
+      // ========== ENVIO DIRETO ==========
+      // Usar sendtoaddress que é mais simples e confiável
+      const txid = await this.rpcCall('sendtoaddress', [destinationAddress, amountBTC]);
       
       // ========== OBTENÇÃO DE DETALHES DA TRANSAÇÃO ==========
       const txDetails = await this.rpcCall('gettransaction', [txid]);
       
       return {
         transactionHash: txid,
-        fee: Math.abs(Math.round(fundedTx.fee * 100000000)), // Converter taxa para satoshis
+        fee: Math.abs(Math.round((txDetails.fee || 0) * 100000000)), // Converter taxa para satoshis
         confirmations: txDetails.confirmations || 0,
         blockHash: txDetails.blockhash || null,
-        assetId: asset
+        assetId: assetId || this.LBTC_ASSET_ID
       };
       
     } catch (error) {
